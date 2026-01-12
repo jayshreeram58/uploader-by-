@@ -288,10 +288,14 @@ def download_and_decrypt_video(url: str, name: str, key: str = None) -> str | No
     if not video_path:
         return None
 
-    if decrypt_file(video_path, key):
-        return video_path
+    # ✅ अगर decrypt fail भी हो तो original path return करो
+    try:
+        if decrypt_file(video_path, key):
+            return video_path
+    except Exception as e:
+        print(f"⚠️ Decrypt failed: {e}")
 
-    return None
+    return video_path  # fallback
 
 
 async def decrypt_and_merge_video(mpd_url, keys_string, output_path, output_name, quality="720"):
