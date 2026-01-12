@@ -75,7 +75,7 @@ from db import db
 
 auto_flags = {}
 auto_clicked = False
-namef = ""
+
 # Global variables
 watermark = "/d"  # Default value
 count = 0
@@ -716,6 +716,10 @@ async def txt_handler(bot: Client, m: Message):
             link0 = "https://" + Vxy
 
             name1 = links[i][0].replace("(", "[").replace(")", "]").replace("_", "").replace("\t", "").replace(":", "").replace("/", "").replace("+", "").replace("#", "").replace("|", "").replace("@", "").replace("*", "").replace(".", "").replace("https", "").replace("http", "").strip()
+            name = name1
+            # GLOBAL FIX — now namef is always defined
+            namef = name1
+            appxkey = None
             if "," in raw_text3:
                  name = f'{PRENAME} {name1[:60]}'
             else:
