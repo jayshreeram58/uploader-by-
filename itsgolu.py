@@ -277,25 +277,7 @@ from tqdm import tqdm
 from base64 import b64decode
 
 
-def download_and_decrypt_video(url: str, name: str, key: str = None) -> str | None:
-    video_path = None
 
-    for _ in range(5):  # resume attempts
-        video_path = download_raw_file(url, name)
-        if video_path and os.path.getsize(video_path) > 10 * 1024 * 1024:
-            break
-
-    if not video_path:
-        return None
-
-    # ✅ अगर decrypt fail भी हो तो original path return करो
-    try:
-        if decrypt_file(video_path, key):
-            return video_path
-    except Exception as e:
-        print(f"⚠️ Decrypt failed: {e}")
-
-    return video_path  # fallback
 
 
 async def decrypt_and_merge_video(mpd_url, keys_string, output_path, output_name, quality="720"):
@@ -640,6 +622,33 @@ async def download_video(url, cmd, name):
         logging.error(f"Error checking file: {exc}")
         return name
 
+def download_and_decrypt_video(url: str, name: str, key: str = None) -> str | None:
+    
+    if "appx" in url and ".m3u8" in url:
+        # Handle appx m3u8 links
+        return download_appx_m3u8(url, name)
+
+    if "appx" in url and ".zip" in url:
+        # Handle appx zip links
+        return process_zip_to_video(url, name)
+    video_path = None
+
+    for _ in range(5):  # resume attempts
+        video_path = download_raw_file(url, name)
+        if video_path and os.path.getsize(video_path) > 10 * 1024 * 1024:
+            break
+
+    if not video_path:
+        return None
+
+    # ✅ अगर decrypt fail भी हो तो original path return करो
+    try:
+        if decrypt_file(video_path, key):
+            return video_path
+    except Exception as e:
+        print(f"⚠️ Decrypt failed: {e}")
+
+    return video_path  # fallback
 
 async def send_vid(bot: Client, m: Message, cc, filename, thumb, name, prog, channel_id, watermark="{CREDIT}", topic_thread_id: int = None):
     try:
