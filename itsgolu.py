@@ -468,7 +468,7 @@ FIXED_REFERER = "https://player.akamai.net.in/"
 
 def process_zip_to_video(url: str, name: str) -> str:
     """
-    Download a ZIP from given URL, extract it, search for m3u8 or ts files,
+    Download a ZIP from given URL, extract it, search for m3u8 or ts/tsb files,
     convert/merge them into MP4, and return the final video path.
     """
 
@@ -522,21 +522,34 @@ def process_zip_to_video(url: str, name: str) -> str:
             "-y",
             "-headers", f"Referer: {FIXED_REFERER}\r\n",
             "-allowed_extensions", "ALL",
+            "-protocol_whitelist", "file,http,https,tcp,tls",
             "-i", m3u8_path,
             "-c", "copy",
             output_path
         ]
         print("⚡ Running ffmpeg to convert m3u8 → mp4...")
-        subprocess.run(cmd, check=True)
-        print("✅ Conversion complete")
-        return output_path
+        try:
+            subprocess.run(cmd, check=True)
+            print("✅ Conversion complete")
+            return output_path
+        except subprocess.CalledProcessError:
+            print("⚠️ ffmpeg failed on m3u8, trying tsb merge...")
 
-    # 4️⃣ If no m3u8, merge .ts files
-    print("⚠️ No m3u8 found, searching for .ts files...")
-    ts_files = sorted(
-        f for f in os.listdir(extract_dir)
-        if f.endswith((".ts", ".tse"))
-    )
+    # 4️⃣ If no m3u8 or ffmpeg failed, merge ts/tsb files
+    print("⚠️ No usable m3u8, searching for .ts/.tsb files...")
+    ts_files = []
+
+    for f in os.listdir(extract_dir):
+        if f.endswith((".ts", ".tse", ".tsb")):
+            full_path = os.path.join(extract_dir, f)
+            if f.endswith(".tsb"):
+                new_path = full_path.replace(".tsb", ".ts")
+                os.rename(full_path, new_path)
+                ts_files.append(new_path)
+            else:
+                ts_files.append(full_path)
+
+    ts_files = sorted(ts_files)
 
     if not ts_files:
         shutil.rmtree(temp_dir)
@@ -545,7 +558,7 @@ def process_zip_to_video(url: str, name: str) -> str:
     list_file = os.path.join(extract_dir, "list.txt")
     with open(list_file, "w") as f:
         for ts in ts_files:
-            f.write(f"file '{os.path.join(extract_dir, ts)}'\n")
+            f.write(f"file '{ts}'\n")
 
     cmd = [
         "ffmpeg", "-y",
@@ -555,30 +568,11 @@ def process_zip_to_video(url: str, name: str) -> str:
         "-c", "copy",
         output_path
     ]
-    print("⚡ Merging ts files with ffmpeg...")
+    print("⚡ Merging ts/tsb files with ffmpeg...")
     subprocess.run(cmd, check=True)
     print("✅ Merge complete")
 
     return output_path
-
-async def download_appx_m3u8(url, name):
-    try:
-        download_cmd = (
-            f'yt-dlp "{url}" '
-            f'--external-downloader aria2c '
-            f'--downloader-args "aria2c: -x 16 -j 32 --referer={FIXED_REFERER}" '
-            f'-o "{name}.mp4"'
-        )
-        print(download_cmd)
-        logging.info(download_cmd)
-
-        k = subprocess.run(download_cmd, shell=True)
-        if k.returncode == 0 and os.path.isfile(f"{name}.mp4"):
-            return f"{name}.mp4"
-        return None
-    except Exception as e:
-        logging.error(f"Error in download_appx_m3u8: {e}")
-        return None
 async def download_video(url, cmd, name):
     # Special cases first
     if "appx" in url and ".m3u8" in url:
