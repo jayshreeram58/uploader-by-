@@ -534,21 +534,15 @@ def process_zip_to_video(url: str, name: str) -> str:
             shutil.rmtree(temp_dir, ignore_errors=True)
             return output_path
         except subprocess.CalledProcessError:
-            print("⚠️ ffmpeg failed on m3u8, trying tsb merge...")
+            print("⚠️ ffmpeg failed on m3u8, trying direct ts/tsb merge...")
 
-    # 4️⃣ If no m3u8 or ffmpeg failed, merge ts/tsb files
+    # 4️⃣ If no m3u8 or ffmpeg failed, merge ts/tsb files directly
     print("⚠️ No usable m3u8, searching for .ts/.tsb files...")
     ts_files = []
 
     for f in os.listdir(extract_dir):
         if f.endswith((".ts", ".tse", ".tsb")):
-            full_path = os.path.join(extract_dir, f)
-            if f.endswith(".tsb"):
-                new_path = full_path.replace(".tsb", ".ts")
-                os.rename(full_path, new_path)
-                ts_files.append(new_path)
-            else:
-                ts_files.append(full_path)
+            ts_files.append(os.path.join(extract_dir, f))
 
     ts_files = sorted(ts_files)
 
@@ -575,6 +569,8 @@ def process_zip_to_video(url: str, name: str) -> str:
 
     shutil.rmtree(temp_dir, ignore_errors=True)
     return output_path
+
+
 async def download_video(url, cmd, name):
     # Special cases first
     if "appx" in url and ".m3u8" in url:
