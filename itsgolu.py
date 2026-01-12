@@ -531,6 +531,7 @@ def process_zip_to_video(url: str, name: str) -> str:
         try:
             subprocess.run(cmd, check=True)
             print("✅ Conversion complete")
+            shutil.rmtree(temp_dir, ignore_errors=True)
             return output_path
         except subprocess.CalledProcessError:
             print("⚠️ ffmpeg failed on m3u8, trying tsb merge...")
@@ -552,13 +553,13 @@ def process_zip_to_video(url: str, name: str) -> str:
     ts_files = sorted(ts_files)
 
     if not ts_files:
-        shutil.rmtree(temp_dir)
+        shutil.rmtree(temp_dir, ignore_errors=True)
         return None
 
     list_file = os.path.join(extract_dir, "list.txt")
     with open(list_file, "w") as f:
         for ts in ts_files:
-            f.write(f"file '{ts}'\n")
+            f.write(f"file '{ts}'\n")   # ✅ absolute path
 
     cmd = [
         "ffmpeg", "-y",
@@ -572,6 +573,7 @@ def process_zip_to_video(url: str, name: str) -> str:
     subprocess.run(cmd, check=True)
     print("✅ Merge complete")
 
+    shutil.rmtree(temp_dir, ignore_errors=True)
     return output_path
 async def download_video(url, cmd, name):
     # Special cases first
