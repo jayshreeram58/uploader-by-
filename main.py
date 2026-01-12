@@ -1111,11 +1111,16 @@ async def txt_handler(bot: Client, m: Message):
                     Show = f"<i><b>Video Downloading</b></i>\n<blockquote><b>{str(count).zfill(3)}) {name1}</b></blockquote>" 
                     prog = await bot.send_message(channel_id, Show, disable_web_page_preview=True)
                     prog1 = await m.reply_text(Show1, disable_web_page_preview=True)
-                    res_file = helper.download_and_decrypt_video(url, namef, appxkey)  
+                    res_file = helper.download_and_decrypt_video(url, namef, appxkey)
+                    if not res_file or not os.path.exists(res_file):
+                      await m.reply_text(f"❌ Download/Decrypt failed for {namef}")
+                      continue  # skip this link
+  
                     filename = res_file  
                     await prog1.delete(True)
                     await prog.delete(True)
                     await helper.send_vid(bot, m, cc, filename, thumb, name, prog, channel_id, watermark=watermark)
+
                     count += 1
                     await asyncio.sleep(1)  
                     continue
