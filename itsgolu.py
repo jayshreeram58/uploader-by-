@@ -26,6 +26,19 @@ from urllib.parse import urljoin
 from vars import *  # Add this import
 from db import Database
 
+import requests
+
+def create_session():
+    session = requests.Session()
+    adapter = requests.adapters.HTTPAdapter(
+        pool_connections=10,
+        pool_maxsize=10,
+        max_retries=3
+    )
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    return session
+
 
 # RAW FILE DOWNLOAD
 # ==============================
