@@ -1113,7 +1113,7 @@ async def txt_handler(bot: Client, m: Message):
                     prog1 = await m.reply_text(Show1, disable_web_page_preview=True)
                     try:
 
-                        res_file = await helper.download_and_decrypt_video(url, name, appxkey)  
+                        res_file = helper.download_and_decrypt_video(url, name, appxkey)  
                         filename = res_file  
                         await prog.delete(True) 
                         if os.exists(filename):
