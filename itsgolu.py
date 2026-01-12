@@ -465,114 +465,110 @@ import tempfile
 import shutil
 import re
 
-def process_mobile_zip(zip_path: str, output_name="output.mp4"):
-    work = tempfile.mkdtemp(prefix="zip_final_")
-    extract_dir = os.path.join(work, "extract")
+
+REFERER = "https://player.akamai.net.in/"
+
+
+def process_zip_to_video(url, name):
+    """
+    Download a mobile-style zip (appx), extract, handle m3u8 or .tse/.tsb segments,
+    rename for ffmpeg, and merge into mp4.
+    """
+    import os, re, zipfile, tempfile, shutil, subprocess, requests
+
+    REFERER = "https://player.akamai.net.in/"
+
+    # 1️⃣ Create temp directories
+    temp_dir = tempfile.mkdtemp(prefix="zip_")
+    zip_path = os.path.join(temp_dir, "video.zip")
+    extract_dir = os.path.join(temp_dir, "extract")
+    output_path = os.path.join(temp_dir, f"{name}.mp4")
     os.makedirs(extract_dir, exist_ok=True)
 
-    try:
-        # ================= EXTRACT =================
-        with zipfile.ZipFile(zip_path, "r") as z:
-            z.extractall(extract_dir)
-        print("✅ ZIP extracted")
+    # 2️⃣ Download ZIP with Referer
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Android)",
+        "Referer": REFERER
+    }
 
-        # ================= RENAME TSB/TSE → TS =================
-        print("🔄 Fixing segments...")
-        segments = {}
-        m3u8_path = None
+    print("⬇️ Downloading ZIP...")
+    with requests.get(url, headers=headers, stream=True, timeout=30) as r:
+        r.raise_for_status()
+        with open(zip_path, "wb") as f:
+            for chunk in r.iter_content(1024 * 1024):
+                if chunk:
+                    f.write(chunk)
+    print("✅ Download complete")
 
-        for root, _, files in os.walk(extract_dir):
-            for f in files:
-                full = os.path.join(root, f)
+    # 3️⃣ Extract ZIP
+    print("📦 Extracting ZIP...")
+    with zipfile.ZipFile(zip_path, "r") as z:
+        z.extractall(extract_dir)
+    print("✅ Extract complete")
 
-                if f.endswith(".m3u8"):
-                    m3u8_path = full
-                    continue
+    # 4️⃣ Find m3u8 (TOP PRIORITY)
+    m3u8_path = None
+    for f in os.listdir(extract_dir):
+        if f.lower().endswith(".m3u8"):
+            m3u8_path = os.path.join(extract_dir, f)
+            break
 
-                m = re.search(r'-(\d+)\.(ts|tsb|tse)$', f)
-                if not m:
-                    continue
+    # 5️⃣ Detect .tse / .tsb / .ts segments and sort by serial
+    segments = []
+    for f in os.listdir(extract_dir):
+        if f.lower().endswith((".tse", ".tsb", ".ts")):  # case-insensitive
+            m = re.search(r"-(\d+)\.(tse|tsb|ts)$", f, re.IGNORECASE)
+            if m:
+                segments.append((int(m.group(1)), f))
 
-                idx = int(m.group(1))
-                if idx == 0:
-                    continue  # skip 0 segment
+    segments.sort(key=lambda x: x[0])
 
-                if not f.endswith(".ts"):
-                    new = os.path.splitext(full)[0] + ".ts"
-                    os.rename(full, new)
-                    full = new
+    # 6️⃣ Rename / copy segments to .ts for ffmpeg
+    ts_files = []
+    for idx, fname in segments:
+        src = os.path.join(extract_dir, fname)
+        dst = os.path.join(extract_dir, f"{idx}.ts")
+        if not os.path.exists(dst):
+            shutil.copy(src, dst)
+        ts_files.append(dst)
 
-                segments[idx] = full
-
-        if not segments:
-            raise RuntimeError("❌ No TS segments found")
-
-        # ================= PATCH M3U8 (IF EXISTS) =================
-        if m3u8_path:
-            print("🧩 Patching m3u8...")
-            patched = []
-            with open(m3u8_path, "r") as f:
-                for line in f:
-                    if ".tsb" in line or ".tse" in line:
-                        line = line.replace(".tsb", ".ts").replace(".tse", ".ts")
-                    if "-0.ts" in line:
-                        continue
-                    patched.append(line)
-
-            with open(m3u8_path, "w") as f:
-                f.writelines(patched)
-
-            # try m3u8 first
-            out = os.path.join(work, output_name)
-            cmd = [
+    # 7️⃣ Try m3u8 first if available
+    if m3u8_path:
+        try:
+            print(f"🎬 Converting m3u8 → mp4...")
+            subprocess.run([
                 "ffmpeg", "-y",
                 "-allowed_extensions", "ALL",
                 "-protocol_whitelist", "file,http,https,tcp,tls",
                 "-i", m3u8_path,
                 "-c", "copy",
-                out
-            ]
-            try:
-                subprocess.run(cmd, check=True)
-                print("✅ Video created via m3u8")
-                return out
-            except:
-                print("⚠️ m3u8 failed, fallback to TS merge")
+                output_path
+            ], check=True)
+            print("✅ m3u8 conversion complete")
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            return output_path
+        except subprocess.CalledProcessError:
+            print("⚠️ m3u8 failed, falling back to TS merge")
 
-        # ================= SERIAL MERGE (1 → n) =================
-        ordered = []
-        i = 1
-        while i in segments:
-            if os.path.isfile(segments[i]):
-                ordered.append(os.path.abspath(segments[i]))
-            i += 1
+    # 8️⃣ Merge TS segments if m3u8 failed or not present
+    print(f"⚡ Merging TS segments (0 → n)...")
+    list_file = os.path.join(extract_dir, "list.txt")
+    with open(list_file, "w") as f:
+        for ts in ts_files:
+            f.write(f"file '{ts}'\n")
 
-        if not ordered:
-            raise RuntimeError("❌ No continuous TS sequence")
+    subprocess.run([
+        "ffmpeg", "-y",
+        "-f", "concat",
+        "-safe", "0",
+        "-i", list_file,
+        "-c", "copy",
+        output_path
+    ], check=True)
 
-        list_file = os.path.join(work, "list.txt")
-        with open(list_file, "w") as f:
-            for ts in ordered:
-                f.write(f"file '{ts}'\n")
-
-        out = os.path.join(work, output_name)
-        subprocess.run([
-            "ffmpeg", "-y",
-            "-f", "concat",
-            "-safe", "0",
-            "-i", list_file,
-            "-c", "copy",
-            out
-        ], check=True)
-
-        print("✅ Video created via TS merge")
-        return out
-
-    finally:
-        shutil.rmtree(work, ignore_errors=True)
-
-
-
+    print("✅ TS merge complete")
+    shutil.rmtree(temp_dir, ignore_errors=True)
+    return output_path
 
 async def download_video(url, cmd, name):
     # Special cases first
