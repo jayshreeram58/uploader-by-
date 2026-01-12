@@ -481,7 +481,7 @@ def process_zip_to_video(url: str, name: str) -> str:
     }
 
     try:
-        # ================== DOWNLOAD ==================
+        # ================= DOWNLOAD =================
         print("⬇️ Downloading ZIP...")
         with requests.get(url, headers=headers, stream=True, timeout=30) as r:
             r.raise_for_status()
@@ -491,80 +491,62 @@ def process_zip_to_video(url: str, name: str) -> str:
                         f.write(chunk)
         print("✅ Download complete")
 
-        # ================== EXTRACT ==================
+        # ================= EXTRACT =================
         print("📦 Extracting ZIP...")
         os.makedirs(extract_dir, exist_ok=True)
         with zipfile.ZipFile(zip_path, "r") as z:
             z.extractall(extract_dir)
         print("✅ Extract complete")
 
-        # ================== SEARCH M3U8 ==================
-        m3u8_path = None
-        for root, _, files in os.walk(extract_dir):
-            for f in files:
-                if f.endswith(".m3u8"):
-                    m3u8_path = os.path.join(root, f)
-                    break
-
-        if m3u8_path:
-            print(f"🎬 Found m3u8: {m3u8_path}")
-            cmd = [
-                "ffmpeg", "-y",
-                "-headers", f"Referer: {FIXED_REFERER}\r\n",
-                "-allowed_extensions", "ALL",
-                "-protocol_whitelist", "file,http,https,tcp,tls",
-                "-i", m3u8_path,
-                "-c", "copy",
-                output_path
-            ]
-            try:
-                subprocess.run(cmd, check=True)
-                print("✅ m3u8 converted successfully")
-                return output_path
-            except subprocess.CalledProcessError:
-                print("⚠️ m3u8 failed, falling back to TS merge")
-
-        # ================== TS / TSB MERGE ==================
-        print("🔍 Searching TS / TSB segments...")
-        ts_files = []
+        # ================= FIND TS/TSB =================
+        print("🔍 Scanning TS / TSB files...")
+        segments = {}
 
         for root, _, files in os.walk(extract_dir):
             for f in files:
-                if f.endswith((".ts", ".tse", ".tsb")):
-                    full_path = os.path.join(root, f)
+                m = re.search(r'-(\d+)\.(ts|tsb)$', f)
+                if not m:
+                    continue
 
-                    if f.endswith(".tsb"):
-                        new_path = os.path.splitext(full_path)[0] + ".ts"
-                        try:
-                            os.rename(full_path, new_path)
-                            print(f"🔄 Renamed: {full_path} → {new_path}")
-                            ts_files.append(new_path)
-                        except Exception as e:
-                            print(f"⚠️ Rename failed: {e}")
-                    else:
-                        ts_files.append(full_path)
+                index = int(m.group(1))
+                if index == 0:        # 🔥 ignore 0
+                    continue
 
-        if not ts_files:
-            raise RuntimeError("❌ No TS files found")
+                full_path = os.path.join(root, f)
 
-        # ================== SORT SEGMENTS ==================
-        def ts_sort_key(x):
-            nums = re.findall(r'\d+', os.path.basename(x))
-            return int(nums[-1]) if nums else 0
+                if f.endswith(".tsb"):
+                    new_path = os.path.splitext(full_path)[0] + ".ts"
+                    try:
+                        os.rename(full_path, new_path)
+                        print(f"🔄 Renamed: {f} → {os.path.basename(new_path)}")
+                        segments[index] = new_path
+                    except:
+                        continue
+                else:
+                    segments[index] = full_path
 
-        ts_files = sorted(ts_files, key=ts_sort_key)
+        if not segments:
+            raise RuntimeError("❌ No valid TS segments found")
 
-        # ================== CREATE LIST.TXT ==================
+        # ================= SERIAL ORDER =================
+        ordered_segments = []
+        i = 1
+        while i in segments:
+            ordered_segments.append(segments[i])
+            i += 1
+
+        if not ordered_segments:
+            raise RuntimeError("❌ No continuous TS sequence from 1 found")
+
+        # ================= CREATE LIST =================
         list_file = os.path.join(extract_dir, "list.txt")
         with open(list_file, "w") as f:
-            for ts in ts_files:
+            for ts in ordered_segments:
                 if os.path.exists(ts):
                     f.write(f"file '{ts}'\n")
-                else:
-                    print(f"⚠️ Missing skipped: {ts}")
 
-        # ================== FFMPEG CONCAT ==================
-        print("⚡ Merging TS files...")
+        # ================= FFMPEG MERGE =================
+        print("⚡ Merging TS files (1 → n)...")
         cmd = [
             "ffmpeg", "-y",
             "-f", "concat",
@@ -579,8 +561,9 @@ def process_zip_to_video(url: str, name: str) -> str:
         return output_path
 
     finally:
-        # temp cleanup optional (comment if debugging)
         shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 
 async def download_video(url, cmd, name):
     # Special cases first
