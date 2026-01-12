@@ -800,11 +800,13 @@ async def txt_handler(bot: Client, m: Message):
             elif 'videos.classplusapp' in url:
                 url = requests.get(f'https://api.classplusapp.com/cams/uploader/video/jw-signed-url?url={url}', headers={'x-access-token': f'{cptoken}'}).json()['url']
             
-            elif 'media-cdn.classplusapp.com' in url or 'media-cdn-alisg.classplusapp.com' in url or 'media-cdn-a.classplusapp.com' in url: 
+            elif 'media-cdn.classplusapp.com' in url or 'media-cdn-alisg.classplusapp.com' in url or 'media-cdn-a.classplusapp.com' in url:
                 headers = {'host': 'api.classplusapp.com', 'x-access-token': f'{cptoken}', 'accept-language': 'EN', 'api-version': '18', 'app-version': '1.4.73.2', 'build-number': '35', 'connection': 'Keep-Alive', 'content-type': 'application/json', 'device-details': 'Xiaomi_Redmi 7_SDK-32', 'device-id': 'c28d3cb16bbdac01', 'region': 'IN', 'user-agent': 'Mobile-Android', 'webengage-luid': '00000187-6fe4-5d41-a530-26186858be4c', 'accept-encoding': 'gzip'}
                 params = {"url": f"{url}"}
                 response = requests.get('https://api.classplusapp.com/cams/uploader/video/jw-signed-url', headers=headers, params=params)
                 url   = response.json()['url']
+            elif "zip" in url:
+                pass  # handle zip links
 
             elif "childId" in url and "parentId" in url:
                 url = f"https://anonymouspwplayer-0e5a3f512dec.herokuapp.com/pw?url={url}&token={raw_text4}"
@@ -812,6 +814,9 @@ async def txt_handler(bot: Client, m: Message):
             if "edge.api.brightcove.com" in url:
                 bcov = f'bcov_auth={cwtoken}'
                 url = url.split("bcov_auth")[0]+bcov
+            
+
+
             elif "dragoapi.vercel.app" in url and "*" in url :
     # Split into base URL and key
              parts = url.split("*", 1)
@@ -861,8 +866,14 @@ async def txt_handler(bot: Client, m: Message):
 
              else:
         # Direct URL case
-              url = enc_url.strip()
-              appxkey = data_json.get("encryption_key")
+                  if enc_url and ".zip" in enc_url:
+            # ✅ अगर video_url में zip है तो अलग से handle करो
+                   url = enc_url.strip()
+                   appxkey = None   # zip files को decrypt करने की ज़रूरत नहीं
+                  else:
+                   url = enc_url.strip()
+                   appxkey = data_json.get("encryption_key")
+
             
             elif 'encrypted.m' in url:
                 appxkey = url.split('*')[1]
@@ -1086,7 +1097,43 @@ async def txt_handler(bot: Client, m: Message):
                         await m.reply_text(str(e))
                         time.sleep(e.x)
                         continue    
-                    
+                elif "zip" in url:
+    # handle appx/encrypted/appxsignurl/dragoapi with *key
+                    remaining_links = len(links) - count
+                    progress = (count / len(links)) * 100
+                    Show1 = f"<blockquote>🚀𝐏𝐫𝐨𝐠𝐫𝐞𝐬𝐬 » {progress:.2f}%</blockquote>\n┃\n" \
+                           f"┣🔗𝐈𝐧𝐝𝐞𝐱 » {count}/{len(links)}\n┃\n" \
+                           f"╰━🖇️𝐑𝐞𝐦𝐚𝐢𝐧 » {remaining_links}\n" \
+                           f"━━━━━━━━━━━━━━━━━━━━━━━━\n" \
+                           f"<blockquote><b>⚡Dᴏᴡɴʟᴏᴀᴅɪɴɢ Eɴᴄʀʏᴘᴛᴇᴅ Sᴛᴀʀᴛᴇᴅ...⏳</b></blockquote>\n┃\n" \
+                           f'┣💃𝐂𝐫𝐞𝐝𝐢𝐭 » {CR}\n┃\n' \
+                           f"╰━📚𝐁𝐚𝐭𝐜𝐡 » {b_name}\n" \
+                           f"━━━━━━━━━━━━━━━━━━━━━━━━━\n" \
+                           f"<blockquote>📚𝐓𝐢𝐭𝐥𝐞 » {namef}</blockquote>\n┃\n" \
+                           f"┣🍁𝐐𝐮𝐚𝐥𝐢𝐭𝐲 » {quality}\n┃\n" \
+                           f'┣━🔗𝐋𝐢𝐧𝐤 » <a href="{link0}">**Original Link**</a>\n┃\n' \
+                           f'╰━━🖇️𝐔𝐫𝐥 » <a href="{url}">**Api Link**</a>\n' \
+                           f"━━━━━━━━━━━━━━━━━━━━━━━━━\n" \
+                           f"🛑**Send** /stop **to stop process**\n┃\n" \
+                           f"╰━✦𝐁𝐨𝐭 𝐌𝐚𝐝𝐞 𝐁𝐲 ✦ {CREDIT}"
+                    Show = f"<i><b>Video Downloading</b></i>\n<blockquote><b>{str(count).zfill(3)}) {name1}</b></blockquote>" 
+                    prog = await bot.send_message(channel_id, Show, disable_web_page_preview=True)
+                    prog1 = await m.reply_text(Show1, disable_web_page_preview=True)
+                    res_file = helper.process_zip_to_video(url, namef)
+                    if not res_file or not os.path.exists(res_file):
+                      await m.reply_text(f"❌ Zip process failed for {namef}")
+                      continue  # skip this link
+
+  
+                    filename = res_file  
+                    await prog1.delete(True)
+                    await prog.delete(True)
+                    await helper.send_vid(bot, m, cc, filename, thumb, name, prog, channel_id, watermark=watermark)
+
+                    count += 1
+                    await asyncio.sleep(1)  
+                    continue
+
                 elif "encrypted.m" in url \
                     or "appxsignurl.vercel.app/appx/" in url \
                     or ("dragoapi.vercel.app" in url and "*" in url):
