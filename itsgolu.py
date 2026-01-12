@@ -466,9 +466,13 @@ import shutil
 
 FIXED_REFERER = "https://player.akamai.net.in/"
 
-def process_zip_to_video(url, name):
-    temp_dir = tempfile.mkdtemp(prefix="zip_")
+def process_zip_to_video(url: str, name: str) -> str:
+    """
+    Download a ZIP from given URL, extract it, search for m3u8 or ts files,
+    convert/merge them into MP4, and return the final video path.
+    """
 
+    temp_dir = tempfile.mkdtemp(prefix="zip_")
     zip_path = os.path.join(temp_dir, "file.zip")
     extract_dir = os.path.join(temp_dir, "extract")
     output_path = os.path.join(temp_dir, f"{name}.mp4")
@@ -479,20 +483,31 @@ def process_zip_to_video(url, name):
         "Range": "bytes=0-"
     }
 
-    # 1️⃣ ZIP DOWNLOAD (FIXED REFERER)
-    with requests.get(url, headers=headers, stream=True, timeout=20) as r:
+    # 1️⃣ Download ZIP with progress
+    print("⬇️ Starting download...")
+    with requests.get(url, headers=headers, stream=True, timeout=30) as r:
         r.raise_for_status()
+        total_size = int(r.headers.get("Content-Length", 0))
+        downloaded = 0
         with open(zip_path, "wb") as f:
             for chunk in r.iter_content(1024 * 1024):
                 if chunk:
                     f.write(chunk)
+                    downloaded += len(chunk)
+                    if total_size > 0:
+                        percent = (downloaded / total_size) * 100
+                        print(f"📊 Downloaded: {downloaded/1024/1024:.2f} MB / {total_size/1024/1024:.2f} MB ({percent:.2f}%)", end="\r")
+    print("\n✅ Download complete")
 
-    # 2️⃣ EXTRACT ZIP
+    # 2️⃣ Extract ZIP
+    print("📦 Extracting zip...")
     os.makedirs(extract_dir, exist_ok=True)
     with zipfile.ZipFile(zip_path, "r") as z:
         z.extractall(extract_dir)
+    print("✅ Extract complete")
 
-    # 3️⃣ FIND m3u8
+    # 3️⃣ Search for m3u8
+    print("🔍 Searching for .m3u8 file...")
     m3u8_path = None
     for root, _, files in os.walk(extract_dir):
         for f in files:
@@ -500,62 +515,51 @@ def process_zip_to_video(url, name):
                 m3u8_path = os.path.join(root, f)
                 break
 
-    if not m3u8_path:
-        shutil.rmtree(temp_dir)
-        raise Exception("❌ m3u8 file nahi mili")
+    if m3u8_path:
+        print(f"🎬 Found m3u8: {m3u8_path}")
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-headers", f"Referer: {FIXED_REFERER}\r\n",
+            "-allowed_extensions", "ALL",
+            "-i", m3u8_path,
+            "-c", "copy",
+            output_path
+        ]
+        print("⚡ Running ffmpeg to convert m3u8 → mp4...")
+        subprocess.run(cmd, check=True)
+        print("✅ Conversion complete")
+        return output_path
 
-    # 4️⃣ m3u8 → MP4 (same referer ffmpeg me bhi)
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-headers", f"Referer: {FIXED_REFERER}\r\n",
-        "-allowed_extensions", "ALL",
-        "-i", m3u8_path,
-        "-c", "copy",
-        output_path
-    ]
-
-    subprocess.run(cmd)
-
-    return output_path, temp_dir
-
-import os, requests, zipfile, subprocess
-
-import zipfile
-
-def extract_zip(zip_path: str) -> str:
-    extract_dir = zip_path.replace(".zip", "")
-    os.makedirs(extract_dir, exist_ok=True)
-
-    with zipfile.ZipFile(zip_path, "r") as z:
-        z.extractall(extract_dir)
-
-    return extract_dir
-
-
-import subprocess
-
-def merge_ts_files(folder: str, output: str):
+    # 4️⃣ If no m3u8, merge .ts files
+    print("⚠️ No m3u8 found, searching for .ts files...")
     ts_files = sorted(
-        f for f in os.listdir(folder)
+        f for f in os.listdir(extract_dir)
         if f.endswith((".ts", ".tse"))
     )
 
-    list_file = os.path.join(folder, "list.txt")
+    if not ts_files:
+        shutil.rmtree(temp_dir)
+        return None
+
+    list_file = os.path.join(extract_dir, "list.txt")
     with open(list_file, "w") as f:
         for ts in ts_files:
-            f.write(f"file '{os.path.join(folder, ts)}'\n")
+            f.write(f"file '{os.path.join(extract_dir, ts)}'\n")
 
-    subprocess.run([
+    cmd = [
         "ffmpeg", "-y",
         "-f", "concat",
         "-safe", "0",
         "-i", list_file,
         "-c", "copy",
-        output
-    ], check=True)
+        output_path
+    ]
+    print("⚡ Merging ts files with ffmpeg...")
+    subprocess.run(cmd, check=True)
+    print("✅ Merge complete")
 
-    return output
+    return output_path
 
 async def download_appx_m3u8(url, name):
     try:
