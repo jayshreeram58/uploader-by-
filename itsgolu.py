@@ -173,6 +173,93 @@ def vid_info(info):
             except:
                 pass
     return new_info
+# ==============================
+# FILE DECRYPT FUNCTION
+# ==============================
+def decrypt_file(file_path: str, key: str) -> bool:
+    if not file_path or not os.path.exists(file_path):
+        return False
+
+    if not key:
+        return True
+
+    key_bytes = key.encode()
+    size = min(28, os.path.getsize(file_path))
+
+    with open(file_path, "r+b") as f:
+        with mmap.mmap(f.fileno(), length=size, access=mmap.ACCESS_WRITE) as mm:
+            for i in range(size):
+                mm[i] ^= key_bytes[i] if i < len(key_bytes) else i
+
+    return True
+# ==============================
+# RAW FILE DOWNLOAD
+# ==============================
+def download_raw_file(url: str, filename: str) -> str | None:
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Linux; Android 13)",
+        "Referer": "https://akstechnicalclasses.classx.co.in/",
+        "Origin": "https://akstechnicalclasses.classx.co.in",
+        "Accept": "*/*",
+        "Connection": "keep-alive"
+    }
+
+    os.makedirs("downloads", exist_ok=True)
+    file_path = f"downloads/{filename}.mkv"
+
+    session = create_session()
+    downloaded = 0
+
+    if os.path.exists(file_path):
+        downloaded = os.path.getsize(file_path)
+        headers["Range"] = f"bytes={downloaded}-"
+
+    try:
+        with session.get(url, headers=headers, stream=True, timeout=(10, 180)) as r:
+            if r.status_code not in (200, 206):
+                print(f"❌ Bad status: {r.status_code}")
+                return None
+
+            total = int(r.headers.get("content-length", 0)) + downloaded
+            chunk_size = 256 * 1024
+
+            with open(file_path, "ab") as f, tqdm(
+                total=total,
+                initial=downloaded,
+                unit="B",
+                unit_scale=True,
+                desc=filename,
+                ncols=80
+            ) as bar:
+                for chunk in r.iter_content(chunk_size=chunk_size):
+                    if chunk:
+                        f.write(chunk)
+                        bar.update(len(chunk))
+
+        return file_path
+
+    except Exception as e:
+        print(f"⚠️ Download interrupted (resume enabled): {e}")
+        return file_path if os.path.exists(file_path) else None
+# ==============================
+# DOWNLOAD + DECRYPT WRAPPER
+# ==============================
+
+def download_and_decrypt_video(url: str, name: str, key: str = None) -> str | None:
+    video_path = None
+
+    for _ in range(5):  # resume attempts
+        video_path = download_raw_file(url, name)
+        if video_path and os.path.getsize(video_path) > 10 * 1024 * 1024:
+            break
+
+    if not video_path:
+        return None
+
+    if decrypt_file(video_path, key):
+        return video_path
+
+    return None
 
 
 async def decrypt_and_merge_video(mpd_url, keys_string, output_path, output_name, quality="720"):
@@ -352,21 +439,110 @@ async def fast_download(url, name):
     
     return None
 
-async def download_video(url, cmd, name):
-    retry_count = 0
-    max_retries = 2
+import os, asyncio, subprocess, logging, tempfile, requests, zipfile, shutil
 
-    while retry_count < max_retries:
+FIXED_REFERER = "https://player.akamai.net.in/"
 
-
-        download_cmd = f'{cmd} -R 25 --fragment-retries 25 --external-downloader aria2c --downloader-args "aria2c: -x 16 -j 32"'
+# 1️⃣ Special case: appx + m3u8
+async def download_appx_m3u8(url, name):
+    try:
+        download_cmd = (
+            f'yt-dlp "{url}" '
+            f'--external-downloader aria2c '
+            f'--downloader-args "aria2c: -x 16 -j 32 --referer={FIXED_REFERER}" '
+            f'-o "{name}.mp4"'
+        )
         print(download_cmd)
         logging.info(download_cmd)
 
         k = subprocess.run(download_cmd, shell=True)
+        if k.returncode == 0 and os.path.isfile(f"{name}.mp4"):
+            return f"{name}.mp4"
+        return None
+    except Exception as e:
+        logging.error(f"Error in download_appx_m3u8: {e}")
+        return None
 
+
+# 2️⃣ Special case: appx + zip
+
+
+def process_zip_to_video(url, name):
+    temp_dir = tempfile.mkdtemp(prefix="zip_")
+    zip_path = os.path.join(temp_dir, "file.zip")
+    extract_dir = os.path.join(temp_dir, "extract")
+    output_path = os.path.join(temp_dir, f"{name}.mp4")
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Android)",
+        "Referer": FIXED_REFERER,
+        "Range": "bytes=0-"
+    }
+
+    # 1️⃣ ZIP DOWNLOAD
+    with requests.get(url, headers=headers, stream=True, timeout=20) as r:
+        r.raise_for_status()
+        with open(zip_path, "wb") as f:
+            for chunk in r.iter_content(1024 * 1024):
+                if chunk:
+                    f.write(chunk)
+
+    # 2️⃣ EXTRACT ZIP
+    os.makedirs(extract_dir, exist_ok=True)
+    with zipfile.ZipFile(zip_path, "r") as z:
+        z.extractall(extract_dir)
+
+    # 3️⃣ FIND m3u8
+    m3u8_path = None
+    for root, _, files in os.walk(extract_dir):
+        for f in files:
+            if f.endswith(".m3u8"):
+                m3u8_path = os.path.join(root, f)
+                break
+
+    if not m3u8_path:
+        shutil.rmtree(temp_dir)
+        raise Exception("❌ m3u8 file nahi mili")
+
+    # 4️⃣ MERGE TS PARTS USING m3u8
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-headers", f"Referer: {FIXED_REFERER}\r\n",
+        "-allowed_extensions", "ALL",
+        "-i", m3u8_path,
+        "-c", "copy",
+        output_path
+    ]
+    subprocess.run(cmd, check=True)
+
+    return output_path, temp_dir
+
+# 3️⃣ Main function
+async def download_video(url, cmd, name):
+    # Special cases first
+    if "appx" in url and ".m3u8" in url:
+        return await download_appx_m3u8(url, name)
+
+    if "appx" in url and ".zip" in url:
+        return process_zip_to_video(url, name)
+
+    # Normal case
+    retry_count = 0
+    max_retries = 2
+
+    while retry_count < max_retries:
+        download_cmd = (
+            f'{cmd} -R 25 --fragment-retries 25 '
+            f'--external-downloader aria2c '
+            f'--downloader-args "aria2c: -x 16 -j 32"'
+        )
+        print(download_cmd)
+        logging.info(download_cmd)
+
+        k = subprocess.run(download_cmd, shell=True)
         if k.returncode == 0:
-            break  # success
+            break
 
         retry_count += 1
         print(f"⚠️ Download failed (attempt {retry_count}/{max_retries}), retrying in 5s...")
@@ -388,13 +564,10 @@ async def download_video(url, cmd, name):
         return name + ".mp4"
     except Exception as exc:
         logging.error(f"Error checking file: {exc}")
-        return name 
+        return name
 
 
-
-
-
-async def send_vid(bot: Client, m: Message, cc, filename, thumb, name, prog, channel_id, watermark="𝐈𝐓'𝐬𝐆𝐎𝐋𝐔", topic_thread_id: int = None):
+async def send_vid(bot: Client, m: Message, cc, filename, thumb, name, prog, channel_id, watermark="{CREDIT}", topic_thread_id: int = None):
     try:
         temp_thumb = None  # ✅ Ensure this is always defined for later cleanup
 
