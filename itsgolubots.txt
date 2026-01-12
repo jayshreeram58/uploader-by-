@@ -4,7 +4,7 @@ tgcrypto==1.2.5
 pyromod==1.5.0
 pysocks==1.7.1
 asyncio
-
+tqdm==4.66.1
 # HTTP & scraping
 requests==2.31.0
 cloudscraper
