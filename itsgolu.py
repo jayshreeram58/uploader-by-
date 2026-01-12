@@ -457,22 +457,19 @@ async def fast_download(url, name):
     
     return None
 
+
 import os
 import requests
 import zipfile
 import subprocess
 import tempfile
 import shutil
+import re
 
 FIXED_REFERER = "https://player.akamai.net.in/"
 
 def process_zip_to_video(url: str, name: str) -> str:
-    """
-    Download a ZIP from given URL, extract it, search for m3u8 or ts/tsb files,
-    convert/merge them into MP4, and return the final video path.
-    """
-
-    temp_dir = tempfile.mkdtemp(prefix="zip_")
+    temp_dir = tempfile.mkdtemp(prefix="zip_cbt_")
     zip_path = os.path.join(temp_dir, "file.zip")
     extract_dir = os.path.join(temp_dir, "extract")
     output_path = os.path.join(temp_dir, f"{name}.mp4")
@@ -483,105 +480,107 @@ def process_zip_to_video(url: str, name: str) -> str:
         "Range": "bytes=0-"
     }
 
-    # 1️⃣ Download ZIP with progress
-    print("⬇️ Starting download...")
-    with requests.get(url, headers=headers, stream=True, timeout=30) as r:
-        r.raise_for_status()
-        total_size = int(r.headers.get("Content-Length", 0))
-        downloaded = 0
-        with open(zip_path, "wb") as f:
-            for chunk in r.iter_content(1024 * 1024):
-                if chunk:
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    if total_size > 0:
-                        percent = (downloaded / total_size) * 100
-                        print(f"📊 Downloaded: {downloaded/1024/1024:.2f} MB / {total_size/1024/1024:.2f} MB ({percent:.2f}%)", end="\r")
-    print("\n✅ Download complete")
+    try:
+        # ================== DOWNLOAD ==================
+        print("⬇️ Downloading ZIP...")
+        with requests.get(url, headers=headers, stream=True, timeout=30) as r:
+            r.raise_for_status()
+            with open(zip_path, "wb") as f:
+                for chunk in r.iter_content(1024 * 1024):
+                    if chunk:
+                        f.write(chunk)
+        print("✅ Download complete")
 
-    # 2️⃣ Extract ZIP
-    print("📦 Extracting zip...")
-    os.makedirs(extract_dir, exist_ok=True)
-    with zipfile.ZipFile(zip_path, "r") as z:
-        z.extractall(extract_dir)
-    print("✅ Extract complete")
+        # ================== EXTRACT ==================
+        print("📦 Extracting ZIP...")
+        os.makedirs(extract_dir, exist_ok=True)
+        with zipfile.ZipFile(zip_path, "r") as z:
+            z.extractall(extract_dir)
+        print("✅ Extract complete")
 
-    # 3️⃣ Search for m3u8
-    print("🔍 Searching for .m3u8 file...")
-    m3u8_path = None
-    for root, _, files in os.walk(extract_dir):
-        for f in files:
-            if f.endswith(".m3u8"):
-                m3u8_path = os.path.join(root, f)
-                break
+        # ================== SEARCH M3U8 ==================
+        m3u8_path = None
+        for root, _, files in os.walk(extract_dir):
+            for f in files:
+                if f.endswith(".m3u8"):
+                    m3u8_path = os.path.join(root, f)
+                    break
 
-    if m3u8_path:
-        print(f"🎬 Found m3u8: {m3u8_path}")
+        if m3u8_path:
+            print(f"🎬 Found m3u8: {m3u8_path}")
+            cmd = [
+                "ffmpeg", "-y",
+                "-headers", f"Referer: {FIXED_REFERER}\r\n",
+                "-allowed_extensions", "ALL",
+                "-protocol_whitelist", "file,http,https,tcp,tls",
+                "-i", m3u8_path,
+                "-c", "copy",
+                output_path
+            ]
+            try:
+                subprocess.run(cmd, check=True)
+                print("✅ m3u8 converted successfully")
+                return output_path
+            except subprocess.CalledProcessError:
+                print("⚠️ m3u8 failed, falling back to TS merge")
+
+        # ================== TS / TSB MERGE ==================
+        print("🔍 Searching TS / TSB segments...")
+        ts_files = []
+
+        for root, _, files in os.walk(extract_dir):
+            for f in files:
+                if f.endswith((".ts", ".tse", ".tsb")):
+                    full_path = os.path.join(root, f)
+
+                    if f.endswith(".tsb"):
+                        new_path = os.path.splitext(full_path)[0] + ".ts"
+                        try:
+                            os.rename(full_path, new_path)
+                            print(f"🔄 Renamed: {full_path} → {new_path}")
+                            ts_files.append(new_path)
+                        except Exception as e:
+                            print(f"⚠️ Rename failed: {e}")
+                    else:
+                        ts_files.append(full_path)
+
+        if not ts_files:
+            raise RuntimeError("❌ No TS files found")
+
+        # ================== SORT SEGMENTS ==================
+        def ts_sort_key(x):
+            nums = re.findall(r'\d+', os.path.basename(x))
+            return int(nums[-1]) if nums else 0
+
+        ts_files = sorted(ts_files, key=ts_sort_key)
+
+        # ================== CREATE LIST.TXT ==================
+        list_file = os.path.join(extract_dir, "list.txt")
+        with open(list_file, "w") as f:
+            for ts in ts_files:
+                if os.path.exists(ts):
+                    f.write(f"file '{ts}'\n")
+                else:
+                    print(f"⚠️ Missing skipped: {ts}")
+
+        # ================== FFMPEG CONCAT ==================
+        print("⚡ Merging TS files...")
         cmd = [
-            "ffmpeg",
-            "-y",
-            "-headers", f"Referer: {FIXED_REFERER}\r\n",
-            "-allowed_extensions", "ALL",
-            "-protocol_whitelist", "file,http,https,tcp,tls",
-            "-i", m3u8_path,
+            "ffmpeg", "-y",
+            "-f", "concat",
+            "-safe", "0",
+            "-i", list_file,
             "-c", "copy",
             output_path
         ]
-        print("⚡ Running ffmpeg to convert m3u8 → mp4...")
-        try:
-            subprocess.run(cmd, check=True)
-            print("✅ Conversion complete")
-            shutil.rmtree(temp_dir, ignore_errors=True)
-            return output_path
-        except subprocess.CalledProcessError:
-            print("⚠️ ffmpeg failed on m3u8, trying tsb merge...")
+        subprocess.run(cmd, check=True)
 
-    # 4️⃣ If no m3u8 or ffmpeg failed, rename tsb → ts and merge
-    print("⚠️ No usable m3u8, searching for .ts/.tsb files...")
-    ts_files = []
+        print("✅ Merge complete")
+        return output_path
 
-    for f in os.listdir(extract_dir):
-        if f.endswith((".ts", ".tse", ".tsb")):
-            full_path = os.path.join(extract_dir, f)
-            if f.endswith(".tsb"):
-                # robust rename using splitext
-                new_path = os.path.splitext(full_path)[0] + ".ts"
-                try:
-                    os.rename(full_path, new_path)
-                    print(f"🔄 Renamed: {full_path} → {new_path}")
-                    ts_files.append(new_path)
-                except Exception as e:
-                    print(f"⚠️ Rename failed for {full_path}: {e}")
-            else:
-                ts_files.append(full_path)
-
-    ts_files = sorted(ts_files)
-
-    if not ts_files:
+    finally:
+        # temp cleanup optional (comment if debugging)
         shutil.rmtree(temp_dir, ignore_errors=True)
-        return None
-
-    list_file = os.path.join(extract_dir, "list.txt")
-    with open(list_file, "w") as f:
-        for ts in ts_files:
-            f.write(f"file '{ts}'\n")   # ✅ absolute path
-
-    cmd = [
-        "ffmpeg", "-y",
-        "-f", "concat",
-        "-safe", "0",
-        "-i", list_file,
-        "-c", "copy",
-        output_path
-    ]
-    print("⚡ Merging ts/tsb files with ffmpeg...")
-    subprocess.run(cmd, check=True)
-    print("✅ Merge complete")
-
-    shutil.rmtree(temp_dir, ignore_errors=True)
-    return output_path
-
-
 
 async def download_video(url, cmd, name):
     # Special cases first
