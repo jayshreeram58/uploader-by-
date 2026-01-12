@@ -38,56 +38,16 @@ def create_session():
     session.mount("http://", adapter)
     session.mount("https://", adapter)
     return session
-
+import os
+import requests
+import zipfile
+import subprocess
+import tempfile
+import shutil
 
 # RAW FILE DOWNLOAD
 # ==============================
-def download_raw_file(url: str, filename: str) -> str | None:
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Linux; Android 13)",
-        "Referer": "https://akstechnicalclasses.classx.co.in/",
-        "Origin": "https://akstechnicalclasses.classx.co.in",
-        "Accept": "*/*",
-        "Connection": "keep-alive"
-    }
 
-    os.makedirs("downloads", exist_ok=True)
-    file_path = f"downloads/{filename}.mkv"
-
-    session = create_session()
-    downloaded = 0
-
-    if os.path.exists(file_path):
-        downloaded = os.path.getsize(file_path)
-        headers["Range"] = f"bytes={downloaded}-"
-
-    try:
-        with session.get(url, headers=headers, stream=True, timeout=(10, 180)) as r:
-            if r.status_code not in (200, 206):
-                print(f"❌ Bad status: {r.status_code}")
-                return None
-
-            total = int(r.headers.get("content-length", 0)) + downloaded
-            chunk_size = 256 * 1024
-
-            with open(file_path, "ab") as f, tqdm(
-                total=total,
-                initial=downloaded,
-                unit="B",
-                unit_scale=True,
-                desc=filename,
-                ncols=80
-            ) as bar:
-                for chunk in r.iter_content(chunk_size=chunk_size):
-                    if chunk:
-                        f.write(chunk)
-                        bar.update(len(chunk))
-
-        return file_path
-
-    except Exception as e:
-        print(f"⚠️ Download interrupted (resume enabled): {e}")
-        return file_path if os.path.exists(file_path) else None
 # ==============================
 def get_duration(filename):
     result = subprocess.run(
@@ -310,6 +270,12 @@ def download_raw_file(url: str, filename: str) -> str | None:
 # ==============================
 # DOWNLOAD + DECRYPT WRAPPER
 # ==============================
+import os
+import mmap
+import requests
+from tqdm import tqdm
+from base64 import b64decode
+
 
 def download_and_decrypt_video(url: str, name: str, key: str = None) -> str | None:
     video_path = None
