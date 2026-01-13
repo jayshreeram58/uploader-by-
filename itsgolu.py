@@ -466,21 +466,19 @@ def process_zip_to_video(url, name):
     temp_dir = tempfile.mkdtemp(prefix="zip_")
     zip_path = os.path.join(temp_dir, "video.zip")
     extract_dir = os.path.join(temp_dir, "extract")
-    output_path = os.path.join(temp_dir, f"{name}.mp4")
+    # sanitize output filename (remove spaces/brackets)
+    safe_name = re.sub(r'[^A-Za-z0-9_-]', '_', name)
+    output_path = os.path.join(temp_dir, f"{safe_name}.mp4")
     os.makedirs(extract_dir, exist_ok=True)
 
-    # 1️⃣ Download ZIP with progress
+    # 1️⃣ Download ZIP
     headers = {"User-Agent": "Mozilla/5.0 (Android)", "Referer": REFERER}
     print("⬇️ Downloading ZIP...")
     with requests.get(url, headers=headers, stream=True, timeout=60) as r:
         r.raise_for_status()
-        size = 0
         with open(zip_path, "wb") as f:
             for chunk in r.iter_content(1024 * 1024):
-                if chunk:
-                    f.write(chunk)
-                    size += len(chunk)
-                    print(f"   Downloaded {size/1024/1024:.2f} MB")
+                if chunk: f.write(chunk)
     print("✅ Download complete")
 
     # 2️⃣ Extract ZIP
@@ -489,73 +487,66 @@ def process_zip_to_video(url, name):
         z.extractall(extract_dir)
     print("✅ Extract complete")
 
-    # 3️⃣ Print random .tsb/.tse files as they appear
+    # 3️⃣ Collect .tsb/.tse files
     exts = (".tsb", ".tse")
-    raw_segments = [f for f in os.listdir(extract_dir) if f.lower().endswith(exts)]
-    print("📂 Extracted segments (random order):")
-    for f in raw_segments:
-        print("   ", f)
-
-    # 4️⃣ Sort by numeric index and print
     idx_pat = re.compile(r"-(\d+)\.(?:tsb|tse)$", re.IGNORECASE)
     segments = []
-    for f in raw_segments:
-        m = idx_pat.search(f)
-        if m:
-            orig_idx = int(m.group(1))
-        else:
-            orig_idx = 999999
-        segments.append((orig_idx, f))
+    for f in os.listdir(extract_dir):
+        if f.lower().endswith(exts):
+            m = idx_pat.search(f)
+            orig_idx = int(m.group(1)) if m else 999999
+            segments.append((orig_idx, f))
+
+    if not segments:
+        raise RuntimeError("❌ No .tsb/.tse segments found")
+
+    # 4️⃣ Sort by original index
     segments.sort(key=lambda x: x[0])
 
-    print("🔢 Sorted segments (before rename):")
-    for orig_idx, fname in segments:
-        print(f"   {fname} (orig {orig_idx})")
-
-    # 5️⃣ Dense rename and print each step
+    # 5️⃣ Dense rename
     ts_files = []
     for dense_idx, (orig_idx, fname) in enumerate(segments):
         src = os.path.join(extract_dir, fname)
         dst = os.path.join(extract_dir, f"{dense_idx}.ts")
         shutil.copy(src, dst)
-        ts_files.append(dst)
-        print(f"🔄 {fname} (orig {orig_idx}) → {dense_idx}.ts")
+        if os.path.exists(dst):
+            ts_files.append(os.path.abspath(dst))
+            print(f"🔄 {fname} (orig {orig_idx}) → {dense_idx}.ts")
+        else:
+            print(f"❌ Rename failed: {fname}")
 
     print(f"✅ Total segments renamed: {len(ts_files)}")
 
-    # 6️⃣ Build concat list and preview
+    # 6️⃣ Build concat list with absolute paths
     list_file = os.path.join(extract_dir, "list.txt")
     with open(list_file, "w") as f:
         for ts in ts_files:
-            f.write(f"file '{os.path.abspath(ts)}'\n")
+            f.write(f"file '{ts}'\n")
 
-    print("🧾 Concat list preview (first 10 lines):")
+    # Verify concat list
+    print("🧾 Verifying concat list:")
     with open(list_file, "r") as f:
         for i, line in enumerate(f):
+            path = line.strip().split("file '")[-1].rstrip("'")
+            if not os.path.exists(path):
+                print(f"❌ Missing: {path}")
+            else:
+                print(f"✅ Exists: {path}")
             if i >= 10: break
-            print(line.strip())
 
-    # 7️⃣ Merge with ffmpeg and stream output
+    # 7️⃣ Merge with ffmpeg
     print("⚡ Merging TS segments...")
-    process = subprocess.Popen([
+    subprocess.run([
         "ffmpeg", "-y",
         "-f", "concat", "-safe", "0",
         "-i", list_file,
         "-c", "copy", output_path
-    ], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-
-    for line in process.stdout:
-        print(line.strip())
-
-    ret = process.wait()
-    if ret != 0:
-        raise RuntimeError("❌ ffmpeg merge failed")
+    ], check=True)
 
     print("✅ TS merge complete")
     print(f"📼 Output: {output_path}")
     shutil.rmtree(temp_dir, ignore_errors=True)
     return output_path
-
 
 
 
