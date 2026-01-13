@@ -458,6 +458,21 @@ async def fast_download(url, name):
     return None
 
 
+import os, re, shutil, subprocess, tempfile, zipfile, requests
+from Crypto.Cipher import AES
+
+# Define REFERER globally or pass it in
+REFERER = "https://player.akamai.net.in/"   # <-- replace with actual referer
+
+def aes128_cbc_decrypt(data: bytes, key: bytes, iv: bytes) -> bytes:
+    """AES-128 CBC decrypt with PKCS7 padding removal."""
+    cipher = AES.new(key, AES.MODE_CBC, iv)
+    dec = cipher.decrypt(data)
+    # remove PKCS7 padding
+    pad_len = dec[-1]
+    if pad_len < 1 or pad_len > 16:
+        raise RuntimeError("❌ Invalid padding in decrypted data")
+    return dec[:-pad_len]
 
 def process_zip_to_video(url: str, name: str) -> str:
     temp_dir = tempfile.mkdtemp(prefix="zip_")
@@ -472,15 +487,19 @@ def process_zip_to_video(url: str, name: str) -> str:
 
     # 1️⃣ Download ZIP
     headers = {"User-Agent": "Mozilla/5.0 (Android)", "Referer": REFERER}
+    print("⬇️ Downloading ZIP...")
     with requests.get(url, headers=headers, stream=True, timeout=60) as r:
         r.raise_for_status()
         with open(zip_path, "wb") as f:
             for chunk in r.iter_content(1024 * 1024):
                 if chunk: f.write(chunk)
+    print("✅ ZIP downloaded:", zip_path)
 
     # 2️⃣ Extract ZIP
+    print("📦 Extracting ZIP...")
     with zipfile.ZipFile(zip_path, "r") as z:
         z.extractall(extract_dir)
+    print("✅ Extracted to:", extract_dir)
 
     # 3️⃣ Find .m3u8 file
     m3u8_file = None
@@ -490,23 +509,30 @@ def process_zip_to_video(url: str, name: str) -> str:
             break
     if not m3u8_file:
         raise RuntimeError("❌ No .m3u8 file found in ZIP")
+    print("📄 Found m3u8:", m3u8_file)
 
-    # 4️⃣ Parse key URI from .m3u8
-    key_url = None
+    # 4️⃣ Parse key URI and IV from .m3u8
+    key_url, iv = None, b"\x00" * 16
     with open(m3u8_file, "r") as f:
         for line in f:
             if line.startswith("#EXT-X-KEY"):
-                # Example: #EXT-X-KEY:METHOD=AES-128,URI="https://.../keyfile"
                 m = re.search(r'URI="([^"]+)"', line)
                 if m: key_url = m.group(1)
+                iv_match = re.search(r'IV=0x([0-9A-Fa-f]+)', line)
+                if iv_match:
+                    iv_hex = iv_match.group(1)
+                    iv = bytes.fromhex(iv_hex.zfill(32))  # pad to 16 bytes
                 break
     if not key_url:
         raise RuntimeError("❌ No key URI found in m3u8")
+    print("🔑 Key URL:", key_url)
+    print("🔑 IV:", iv.hex())
 
     # 5️⃣ Download key
     key_data = requests.get(key_url, headers=headers).content
     if len(key_data) != 16:
         raise RuntimeError("❌ Invalid AES-128 key length")
+    print("✅ Key downloaded")
 
     # 6️⃣ Decrypt .tsb/.tse chunks
     exts = (".tsb", ".tse")
@@ -520,7 +546,6 @@ def process_zip_to_video(url: str, name: str) -> str:
     segments.sort(key=lambda x: x[0])
 
     ts_files = []
-    iv = b"\x00" * 16  # default IV if not specified
     for dense_idx, (orig_idx, fname) in enumerate(segments):
         src_path = os.path.join(extract_dir, fname)
         enc = open(src_path, "rb").read()
@@ -535,6 +560,7 @@ def process_zip_to_video(url: str, name: str) -> str:
     with open(list_file, "w") as f:
         for ts in ts_files:
             f.write(f"file '{os.path.basename(ts)}'\n")
+    print("📑 Concat list built:", list_file)
 
     # 8️⃣ Merge with ffmpeg
     cmd = [
@@ -545,9 +571,11 @@ def process_zip_to_video(url: str, name: str) -> str:
         "-c:a", "aac",
         output_path
     ]
+    print("🎬 Running ffmpeg merge...")
     subprocess.run(cmd, cwd=decrypt_dir, check=True)
-
     print("✅ Video created:", output_path)
+
+    # Cleanup
     shutil.rmtree(temp_dir, ignore_errors=True)
     return output_path
 
