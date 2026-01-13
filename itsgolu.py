@@ -470,9 +470,10 @@ REFERER = "https://player.akamai.net.in/"
 
 def process_zip_to_video(url, name):
     """
-    Download ZIP, extract, rename all segments (.tsd/.tse/.tsb/.ts) → original numeric index .ts,
-    show renamed files, store them in a list, and merge into mp4 with ffmpeg.
+    Download ZIP, extract, map original indices to dense 0..N-1 .ts files,
+    print each rename, store renamed list, and merge with ffmpeg.
     """
+    # 0️⃣ Setup
     temp_dir = tempfile.mkdtemp(prefix="zip_")
     zip_path = os.path.join(temp_dir, "video.zip")
     extract_dir = os.path.join(temp_dir, "extract")
@@ -499,35 +500,61 @@ def process_zip_to_video(url, name):
         z.extractall(extract_dir)
     print("✅ Extract complete")
 
-    # 3️⃣ Rename all segments using original numeric index
-    ts_files = []
+    # 3️⃣ Collect segments with original index
+    #    Pattern examples:
+    #    master-...-0.tsb, something-...-22.tsd, file-...-33.ts
+    segments = []
+    exts = (".tsd", ".tse", ".tsb", ".ts")
+    idx_pat = re.compile(r"-(\d+)\.(?:tsd|tse|tsb|ts)$", re.IGNORECASE)
+
     for f in os.listdir(extract_dir):
-        if f.lower().endswith((".tsd", ".tse", ".tsb", ".ts")):
-            src = os.path.join(extract_dir, f)
-            # extract numeric index from filename
-            m = re.search(r"-(\d+)\.(?:tsd|tse|tsb|ts)$", f, re.IGNORECASE)
+        fl = f.lower()
+        if fl.endswith(exts):
+            m = idx_pat.search(f)
             if m:
-                idx = int(m.group(1))
+                orig_idx = int(m.group(1))
             else:
-                # fallback if no number found
-                idx = len(ts_files)
-            dst = os.path.join(extract_dir, f"{idx}.ts")
-            shutil.copy(src, dst)
-            ts_files.append(dst)
-            print(f"🔄 Renamed: {src} → {dst}")
+                # If no index, push to end; will be renumbered densely anyway
+                orig_idx = 10**9
+            segments.append((orig_idx, f))
 
-    if not ts_files:
-        raise RuntimeError("❌ No TS segments found in ZIP")
+    if not segments:
+        raise RuntimeError("❌ No TS-like segments found (.tsd/.tse/.tsb/.ts)")
 
-    print(f"✅ Total segments renamed: {len(ts_files)}")
+    # 4️⃣ Sort by original index, then dense renumber to 0..N-1
+    segments.sort(key=lambda x: x[0])
 
-    # 4️⃣ Build concat list sorted by numeric index
+    renamed_ts_files = []  # absolute paths of 0.ts..N-1.ts
+    print("🔢 Dense renumbering (original → dense):")
+    for dense_idx, (orig_idx, fname) in enumerate(segments):
+        src = os.path.join(extract_dir, fname)
+        dst = os.path.join(extract_dir, f"{dense_idx}.ts")
+        shutil.copy(src, dst)
+        if not os.path.exists(dst):
+            raise RuntimeError(f"❌ Rename failed for {src} → {dst}")
+        renamed_ts_files.append(os.path.abspath(dst))
+        print(f"🔄 {fname} (orig {orig_idx}) → {dense_idx}.ts")
+
+    print(f"✅ Total segments renamed: {len(renamed_ts_files)}")
+    # 5️⃣ Verify dense sequence is contiguous starting at 0
+    expected_first = os.path.join(extract_dir, "0.ts")
+    if not os.path.exists(expected_first):
+        raise RuntimeError("❌ Dense sequence check failed: 0.ts not found after renumbering")
+
+    # 6️⃣ Build concat list from dense sequence
     list_file = os.path.join(extract_dir, "list.txt")
     with open(list_file, "w") as f:
-        for ts in sorted(ts_files, key=lambda x: int(os.path.basename(x).split('.')[0])):
-            f.write(f"file '{os.path.abspath(ts)}'\n")
+        for ts_abs in renamed_ts_files:
+            f.write(f"file '{ts_abs}'\n")
 
-    # 5️⃣ Merge with ffmpeg
+    print("🧾 Concat list preview (first 10 lines):")
+    with open(list_file, "r") as f:
+        for i, line in enumerate(f):
+            if i >= 10:
+                break
+            print(line.strip())
+
+    # 7️⃣ Merge with ffmpeg (copy codecs)
     print("⚡ Merging TS segments...")
     subprocess.run([
         "ffmpeg", "-y",
@@ -539,9 +566,9 @@ def process_zip_to_video(url, name):
     ], check=True)
 
     print("✅ TS merge complete")
+    print(f"📼 Output: {output_path}")
     shutil.rmtree(temp_dir, ignore_errors=True)
     return output_path
-
 
 
 
