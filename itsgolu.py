@@ -469,40 +469,51 @@ def process_zip_to_video(url, name):
     output_path = os.path.join(temp_dir, f"{name}.mp4")
     os.makedirs(extract_dir, exist_ok=True)
 
-    # 1️⃣ Download ZIP
+    # 1️⃣ Download ZIP with progress
     headers = {"User-Agent": "Mozilla/5.0 (Android)", "Referer": REFERER}
+    print("⬇️ Downloading ZIP...")
     with requests.get(url, headers=headers, stream=True, timeout=60) as r:
         r.raise_for_status()
+        size = 0
         with open(zip_path, "wb") as f:
             for chunk in r.iter_content(1024 * 1024):
-                if chunk: f.write(chunk)
+                if chunk:
+                    f.write(chunk)
+                    size += len(chunk)
+                    print(f"   Downloaded {size/1024/1024:.2f} MB")
+    print("✅ Download complete")
 
     # 2️⃣ Extract ZIP
+    print("📦 Extracting ZIP...")
     with zipfile.ZipFile(zip_path, "r") as z:
         z.extractall(extract_dir)
+    print("✅ Extract complete")
 
-    # 3️⃣ Collect segments with original index
-    exts = (".tsd", ".tse", ".tsb", ".ts")
-    idx_pat = re.compile(r"-(\d+)\.(?:tsd|tse|tsb|ts)$", re.IGNORECASE)
+    # 3️⃣ Print random .tsb/.tse files as they appear
+    exts = (".tsb", ".tse")
+    raw_segments = [f for f in os.listdir(extract_dir) if f.lower().endswith(exts)]
+    print("📂 Extracted segments (random order):")
+    for f in raw_segments:
+        print("   ", f)
+
+    # 4️⃣ Sort by numeric index and print
+    idx_pat = re.compile(r"-(\d+)\.(?:tsb|tse)$", re.IGNORECASE)
     segments = []
-    for f in os.listdir(extract_dir):
-        if f.lower().endswith(exts):
-            m = idx_pat.search(f)
-            if m:
-                orig_idx = int(m.group(1))
-            else:
-                orig_idx = 999999
-            segments.append((orig_idx, f))
-
-    if not segments:
-        raise RuntimeError("❌ No TS segments found")
-
-    # 4️⃣ Sort by original numeric index
+    for f in raw_segments:
+        m = idx_pat.search(f)
+        if m:
+            orig_idx = int(m.group(1))
+        else:
+            orig_idx = 999999
+        segments.append((orig_idx, f))
     segments.sort(key=lambda x: x[0])
 
-    # 5️⃣ Dense rename: 0.ts, 1.ts, 2.ts...
+    print("🔢 Sorted segments (before rename):")
+    for orig_idx, fname in segments:
+        print(f"   {fname} (orig {orig_idx})")
+
+    # 5️⃣ Dense rename and print each step
     ts_files = []
-    print("🔢 Dense renumbering:")
     for dense_idx, (orig_idx, fname) in enumerate(segments):
         src = os.path.join(extract_dir, fname)
         dst = os.path.join(extract_dir, f"{dense_idx}.ts")
@@ -512,7 +523,7 @@ def process_zip_to_video(url, name):
 
     print(f"✅ Total segments renamed: {len(ts_files)}")
 
-    # 6️⃣ Build concat list
+    # 6️⃣ Build concat list and preview
     list_file = os.path.join(extract_dir, "list.txt")
     with open(list_file, "w") as f:
         for ts in ts_files:
@@ -524,18 +535,27 @@ def process_zip_to_video(url, name):
             if i >= 10: break
             print(line.strip())
 
-    # 7️⃣ Merge with ffmpeg
-    subprocess.run([
+    # 7️⃣ Merge with ffmpeg and stream output
+    print("⚡ Merging TS segments...")
+    process = subprocess.Popen([
         "ffmpeg", "-y",
         "-f", "concat", "-safe", "0",
         "-i", list_file,
         "-c", "copy", output_path
-    ], check=True)
+    ], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+
+    for line in process.stdout:
+        print(line.strip())
+
+    ret = process.wait()
+    if ret != 0:
+        raise RuntimeError("❌ ffmpeg merge failed")
 
     print("✅ TS merge complete")
     print(f"📼 Output: {output_path}")
     shutil.rmtree(temp_dir, ignore_errors=True)
     return output_path
+
 
 
 
