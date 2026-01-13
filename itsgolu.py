@@ -458,87 +458,227 @@ async def fast_download(url, name):
     return None
 
 
-import os, zipfile, subprocess, tempfile, shutil, requests, re
+
+import os, zipfile, subprocess, tempfile, shutil, requests, re, stat
+from typing import Optional, Callable
+
+# Optional: install cryptography if using AES
+# pip install cryptography
+try:
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    from cryptography.hazmat.backends import default_backend
+    HAS_CRYPTO = True
+except Exception:
+    HAS_CRYPTO = False
 
 REFERER = "https://player.akamai.net.in/"
 
-def process_zip_to_video(url, name):
+
+def xor_bytes(data: bytes, key: bytes) -> bytes:
+    # Simple XOR over data with repeating key
+    out = bytearray(len(data))
+    klen = len(key)
+    for i in range(len(data)):
+        out[i] = data[i] ^ key[i % klen]
+    return bytes(out)
+
+
+def aes128_cbc_decrypt(data: bytes, key: bytes, iv: bytes) -> bytes:
+    # AES-128-CBC decryption (PKCS7 padding handling by ffmpeg usually not needed for TS)
+    if not HAS_CRYPTO:
+        raise RuntimeError("AES decryption requested but 'cryptography' is not available")
+    cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
+    decryptor = cipher.decryptor()
+    plain = decryptor.update(data) + decryptor.finalize()
+    return plain
+
+
+def looks_like_mpeg_ts(data: bytes) -> bool:
+    # Check MPEG-TS sync byte (0x47) every 188 bytes for a few packets
+    if len(data) < 188 * 4:
+        return False
+    packet_size = 188
+    for offset in range(0, packet_size * 4, packet_size):
+        if data[offset] != 0x47:
+            return False
+    return True
+
+
+def default_decrypt_chunk(chunk: bytes,
+                          method: str = "none",
+                          xor_key: Optional[bytes] = None,
+                          aes_key: Optional[bytes] = None,
+                          aes_iv: Optional[bytes] = None) -> bytes:
+    # Plug your logic:
+    # method: "none" | "xor" | "aes-cbc"
+    if method == "none":
+        return chunk
+    elif method == "xor":
+        if not xor_key:
+            raise ValueError("xor_key required for XOR")
+        return xor_bytes(chunk, xor_key)
+    elif method == "aes-cbc":
+        if not aes_key or not aes_iv:
+            raise ValueError("aes_key and aes_iv required for AES-CBC")
+        return aes128_cbc_decrypt(chunk, aes_key, aes_iv)
+    else:
+        raise ValueError(f"Unknown decrypt method: {method}")
+
+
+def process_zip_to_video_decrypt(url: str,
+                                 name: str,
+                                 decrypt_method: str = "none",
+                                 xor_key_hex: Optional[str] = None,
+                                 aes_key_hex: Optional[str] = None,
+                                 aes_iv_hex: Optional[str] = None,
+                                 decryptor: Optional[Callable[[bytes], bytes]] = None) -> str:
+    """
+    - decrypt_method: "none", "xor", "aes-cbc"
+    - xor_key_hex / aes_key_hex / aes_iv_hex: provide keys in hex if using built-in decryptor
+    - decryptor: optional custom function(bytes)->bytes to override decryption
+    """
     temp_dir = tempfile.mkdtemp(prefix="zip_")
     zip_path = os.path.join(temp_dir, "video.zip")
     extract_dir = os.path.join(temp_dir, "extract")
+    decrypt_dir = os.path.join(temp_dir, "decrypt")
     os.makedirs(extract_dir, exist_ok=True)
+    os.makedirs(decrypt_dir, exist_ok=True)
 
+    # sanitize output filename
     safe_name = re.sub(r'[^A-Za-z0-9_-]', '_', name)
     output_path = os.path.join(temp_dir, f"{safe_name}.mp4")
 
-    # 1️⃣ Download ZIP
-    headers = {"User-Agent": "Mozilla/5.0 (Android)", "Referer": REFERER}
+    # Prepare keys
+    xor_key = bytes.fromhex(xor_key_hex) if xor_key_hex else None
+    aes_key = bytes.fromhex(aes_key_hex) if aes_key_hex else None
+    aes_iv = bytes.fromhex(aes_iv_hex) if aes_iv_hex else None
+
     print("⬇️ Downloading ZIP...")
+    headers = {"User-Agent": "Mozilla/5.0 (Android)", "Referer": REFERER}
     with requests.get(url, headers=headers, stream=True, timeout=60) as r:
         r.raise_for_status()
+        size = 0
         with open(zip_path, "wb") as f:
             for chunk in r.iter_content(1024 * 1024):
-                if chunk: f.write(chunk)
+                if chunk:
+                    f.write(chunk); size += len(chunk)
+                    print(f"   Downloaded {size/1024/1024:.2f} MB")
     print("✅ Download complete")
 
-    # 2️⃣ Extract ZIP
     print("📦 Extracting ZIP...")
     with zipfile.ZipFile(zip_path, "r") as z:
         z.extractall(extract_dir)
     print("✅ Extract complete")
 
-    # 3️⃣ Collect .tsb/.tse files
+    # Collect random .tsb/.tse files
     exts = (".tsb", ".tse")
+    raw_segments = [f for f in os.listdir(extract_dir) if f.lower().endswith(exts)]
+    if not raw_segments:
+        raise RuntimeError("❌ No .tsb/.tse segments found")
+
+    print("📂 Extracted segments (random order):")
+    for f in raw_segments:
+        print("   ", f)
+
+    # Sort by numeric index before rename
     idx_pat = re.compile(r"-(\d+)\.(?:tsb|tse)$", re.IGNORECASE)
     segments = []
-    for f in os.listdir(extract_dir):
-        if f.lower().endswith(exts):
-            m = idx_pat.search(f)
-            orig_idx = int(m.group(1)) if m else 999999
-            segments.append((orig_idx, f))
+    for f in raw_segments:
+        m = idx_pat.search(f)
+        orig_idx = int(m.group(1)) if m else 999999
+        segments.append((orig_idx, f))
     segments.sort(key=lambda x: x[0])
 
-    # 4️⃣ Dense rename
+    print("🔢 Sorted segments (before decrypt+rename):")
+    for orig_idx, fname in segments:
+        print(f"   {fname} (orig {orig_idx})")
+
+    # Decrypt + rename to dense sequence .ts
     ts_files = []
+    print("🔓 Decrypting chunks and renaming:")
     for dense_idx, (orig_idx, fname) in enumerate(segments):
-        src = os.path.join(extract_dir, fname)
-        dst = os.path.join(extract_dir, f"{dense_idx}.ts")
-        shutil.copy(src, dst)
-        ts_files.append(dst)
-        print(f"🔄 {fname} (orig {orig_idx}) → {dense_idx}.ts")
+        src_path = os.path.join(extract_dir, fname)
+        with open(src_path, "rb") as infile:
+            enc = infile.read()
 
-    print(f"✅ Total segments renamed: {len(ts_files)}")
+        # Use custom decryptor if provided
+        if decryptor:
+            dec = decryptor(enc)
+        else:
+            dec = default_decrypt_chunk(enc, decrypt_method, xor_key, aes_key, aes_iv)
 
-    # 5️⃣ Append all chunks into one raw file
-    merged_ts = os.path.join(temp_dir, "merged.ts")
-    with open(merged_ts, "wb") as outfile:
+        dst_path = os.path.join(decrypt_dir, f"{dense_idx}.ts")
+        with open(dst_path, "wb") as outfile:
+            outfile.write(dec)
+
+        # permission + verify
+        os.chmod(dst_path, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+        exists = os.path.exists(dst_path)
+        size = os.path.getsize(dst_path) if exists else 0
+        looks_ts = looks_like_mpeg_ts(dec)
+        print(f"   {fname} (orig {orig_idx}) → {dense_idx}.ts | exists={exists} size={size} bytes | mpeg_ts={looks_ts}")
+
+        if not exists or size == 0:
+            raise RuntimeError(f"❌ Decrypt/rename failed for {dst_path}")
+
+        ts_files.append(dst_path)
+
+    print(f"✅ Total decrypted segments: {len(ts_files)}")
+
+    # If none look like TS, warn early (probably wrong key/method)
+    sample_checks = sum(1 for p in ts_files[:10] if looks_like_mpeg_ts(open(p, "rb").read(188*4)))
+    if sample_checks == 0:
+        print("⚠️ Warning: Decrypted samples do not look like MPEG-TS (sync 0x47 missing). Check keys/method.")
+
+    # Build concat list (relative), run ffmpeg from decrypt_dir
+    list_file = os.path.join(decrypt_dir, "list.txt")
+    with open(list_file, "w", encoding="utf-8", newline="\n") as f:
         for ts in ts_files:
-            with open(ts, "rb") as infile:
-                shutil.copyfileobj(infile, outfile)
-    print(f"✅ Raw append complete: {merged_ts}")
+            f.write(f"file '{os.path.basename(ts)}'\n")
 
-    # 6️⃣ Decode with ffmpeg
-    print("⚡ Decoding merged stream with ffmpeg...")
-    process = subprocess.Popen([
+    print("🧾 Concat list preview (first 10 lines):")
+    with open(list_file, "r", encoding="utf-8") as f:
+        for i, line in enumerate(f):
+            if i >= 10: break
+            print("   " + line.strip())
+
+    print("🧾 Verifying concat list references:")
+    with open(list_file, "r", encoding="utf-8") as f:
+        for i, line in enumerate(f):
+            rel = line.strip().replace("file '", "").rstrip("'")
+            abs_path = os.path.join(decrypt_dir, rel)
+            if os.path.exists(abs_path):
+                print(f"   ✅ Exists: {abs_path}")
+            else:
+                print(f"   ❌ Missing: {abs_path}")
+                raise RuntimeError(f"Missing file in concat list: {abs_path}")
+            if i >= 20:
+                print("   ...")
+                break
+
+    # Merge (re-encode for robustness)
+    print("⚡ Merging TS segments (re-encode)...")
+    cmd = [
         "ffmpeg", "-y",
-        "-i", merged_ts,
+        "-f", "concat", "-safe", "0",
+        "-i", "list.txt",
         "-c:v", "libx264",
         "-c:a", "aac",
         output_path
-    ], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-
+    ]
+    print("🔧 Command:", " ".join(cmd))
+    process = subprocess.Popen(cmd, cwd=decrypt_dir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     for line in process.stdout:
         print(line.strip())
-
     ret = process.wait()
     if ret != 0:
-        raise RuntimeError("❌ ffmpeg decode failed")
+        raise RuntimeError("❌ ffmpeg merge failed")
 
     print("✅ Video created")
     print(f"📼 Output: {output_path}")
+
     shutil.rmtree(temp_dir, ignore_errors=True)
     return output_path
-
 
 async def download_video(url, cmd, name):
     # Special cases first
@@ -594,10 +734,16 @@ def download_and_decrypt_video(url: str, name: str, key: str = None) -> str | No
         return download_appx_m3u8(url, name)
 
     if "appx" in url and ".zip" in url:
-        # Handle appx zip links
-        return process_zip_to_video(url, name)
+    # Handle appx zip links (encrypted chunks)
+        return process_zip_to_video_decrypt(
+        url,
+        name,
+        decrypt_method="xor",        # ya "aes-cbc" depending on actual encryption
+        xor_key_hex="2a",            # example key, replace with real
+        aes_key_hex=None,
+        aes_iv_hex=None
+    )   
     video_path = None
-
     for _ in range(5):  # resume attempts
         video_path = download_raw_file(url, name)
         if video_path and os.path.getsize(video_path) > 10 * 1024 * 1024:
