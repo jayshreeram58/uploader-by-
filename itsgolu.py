@@ -469,7 +469,7 @@ REFERER = "https://player.akamai.net.in/"
 
 def process_zip_to_video(url, name):
     """
-    Download ZIP, extract, rename .tse/.tsb/.ts → sequential .ts,
+    Download ZIP, extract, rename all segments (.tsd/.tse/.tsb/.ts) → sequential .ts,
     and merge into mp4 with ffmpeg.
     """
     temp_dir = tempfile.mkdtemp(prefix="zip_")
@@ -484,7 +484,7 @@ def process_zip_to_video(url, name):
         "Referer": REFERER
     }
     print("⬇️ Downloading ZIP...")
-    with requests.get(url, headers=headers, stream=True, timeout=30) as r:
+    with requests.get(url, headers=headers, stream=True, timeout=60) as r:
         r.raise_for_status()
         with open(zip_path, "wb") as f:
             for chunk in r.iter_content(1024 * 1024):
@@ -492,7 +492,7 @@ def process_zip_to_video(url, name):
                     f.write(chunk)
     print("✅ Download complete")
 
-    # 2️⃣ Extract ZIP safely
+    # 2️⃣ Extract ZIP
     print("📦 Extracting ZIP...")
     with zipfile.ZipFile(zip_path, "r") as z:
         z.extractall(extract_dir)
@@ -502,7 +502,7 @@ def process_zip_to_video(url, name):
     ts_files = []
     counter = 0
     for f in sorted(os.listdir(extract_dir)):
-        if f.lower().endswith((".tse", ".tsb", ".ts")):
+        if f.lower().endswith((".tsd", ".tse", ".tsb", ".ts")):
             src = os.path.join(extract_dir, f)
             dst = os.path.join(extract_dir, f"{counter}.ts")
             shutil.copy(src, dst)   # force rename to .ts
@@ -532,7 +532,9 @@ def process_zip_to_video(url, name):
     print("✅ TS merge complete")
     shutil.rmtree(temp_dir, ignore_errors=True)
     return output_path
-    
+
+
+
 
 async def download_video(url, cmd, name):
     # Special cases first
