@@ -47,6 +47,44 @@ import shutil
 
 # RAW FILE DOWNLOAD
 # ==============================
+import os
+import yt_dlp
+
+
+def download_youtube(url, name, output_path="downloads"):
+    if not os.path.exists(output_path):
+        os.makedirs(output_path)
+        print(f"[INFO] Created directory: {output_path}")
+
+    print(f"[INFO] Starting YouTube download for: {url}")
+
+    ydl_opts = {
+        "format": "bestvideo+bestaudio/best",   # HD quality
+        "merge_output_format": "mp4",           # final file format
+        "outtmpl": os.path.join(output_path, f"{name}.%(ext)s"),
+        "noplaylist": True,
+        "quiet": False,
+        "extractor_args": {"youtube": {"player_client": ["default"]}},  # avoid JS runtime warning
+    }
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([url])
+        print("[SUCCESS] YouTube download completed.")
+        return os.path.join(output_path, f"{name}.mp4")
+    except Exception as e:
+        print(f"[ERROR] YouTube download failed: {e}")
+        return None
+
+
+
+def process_url(url):
+    if "youtube" in url:
+        print("[INFO] Detected YouTube URL.")
+        download_youtube_video(url)
+    else:
+        print("[INFO] Unsupported URL type.")
+
 
 # ==============================
 def get_duration(filename):
@@ -646,6 +684,12 @@ async def download_video(url, cmd, name):
 
     if "appx" in url and ".zip" in url:
         return process_zip_to_video(url, name)
+    
+
+    if "youtube.com" in url or "youtu.be" in url:
+        return download_youtube(url, name)
+
+
 
     # Normal case
     retry_count = 0
@@ -695,6 +739,11 @@ def download_and_decrypt_video(url: str, name: str, key: str = None) -> str | No
 
     if "appx" in url and ".zip" in url:
         return process_zip_to_video(url, name)
+    
+    if "youtube.com" in url or "youtu.be" in url:
+        return download_youtube(url, name)
+
+
     video_path = None
     for _ in range(5):  # resume attempts
         video_path = download_raw_file(url, name)
