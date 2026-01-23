@@ -798,21 +798,21 @@ async def txt_handler(bot: Client, m: Message):
                 params = {"url": f"{url}"}
             
                 response = requests.get('https://api.classplusapp.com/cams/uploader/video/jw-signed-url', headers=headers, params=params)'''
-                response = request.get(f"https://api-cp-sooty.vercel.app/ITsGOLU_OFFICIAL?url={url}")
-                url = response.json()['url']  
+                response = requests.get(f"https://api-cp-sooty.vercel.app/ITsGOLU_OFFICIAL?url={url}")
+                url = response.json()['url']
            
             elif 'videos.classplusapp' in url:
                 '''url = requests.get(f'https://api.classplusapp.com/cams/uploader/video/jw-signed-url?url={url}', headers={'x-access-token': f'{cptoken}'}).json()['url']'''
-                response = request.get(f"https://api-cp-sooty.vercel.app/ITsGOLU_OFFICIAL?url={url}")
-                url = response.json()['url']  
+                response = requests.get(f"https://api-cp-sooty.vercel.app/ITsGOLU_OFFICIAL?url={url}")
+                url = response.json()['url']
             
             elif 'media-cdn.classplusapp.com' in url or 'media-cdn-alisg.classplusapp.com' in url or 'media-cdn-a.classplusapp.com' in url:
                 '''headers = {'host': 'api.classplusapp.com', 'x-access-token': f'{cptoken}', 'accept-language': 'EN', 'api-version': '18', 'app-version': '1.4.73.2', 'build-number': '35', 'connection': 'Keep-Alive', 'content-type': 'application/json', 'device-details': 'Xiaomi_Redmi 7_SDK-32', 'device-id': 'c28d3cb16bbdac01', 'region': 'IN', 'user-agent': 'Mobile-Android', 'webengage-luid': '00000187-6fe4-5d41-a530-26186858be4c', 'accept-encoding': 'gzip'}
                 params = {"url": f"{url}"}
                 response = requests.get('https://api.classplusapp.com/cams/uploader/video/jw-signed-url', headers=headers, params=params)'''
-                response = request.get(f"https://api-cp-sooty.vercel.app/ITsGOLU_OFFICIAL?url={url}")
-                url = response.json()['url'] 
-                
+                response = requests.get(f"https://api-cp-sooty.vercel.app/ITsGOLU_OFFICIAL?url={url}")
+                url = response.json()['url']
+
             elif "zip" in url:
                 pass  # handle zip links
 
@@ -852,6 +852,8 @@ async def txt_handler(bot: Client, m: Message):
             elif 'encrypted.m' in url:
                  appxkey = url.split('*')[1]
                  url = url.split('*')[0]
+            
+
             
 
             
@@ -938,7 +940,48 @@ async def txt_handler(bot: Client, m: Message):
                         await m.reply_text(str(e))
                         time.sleep(e.x)
                         continue    
-  
+                elif "https://www.youtube.com/" in url or "https://youtu.be/" in url:
+
+                        try:
+                            print("🎬 YouTube Embed - converting to watch link")
+        
+        # Convert embed link to watch?v= format
+                            video_id = url.split("/")[-1]   # last part after embed/
+                            watch_url = f"https://www.youtube.com/watch?v={video_id}"
+        
+                            keyboard_layout = [
+                            [InlineKeyboardButton("▶️ Watch on YouTube", url=watch_url)]
+        ]
+                            reply_markup = InlineKeyboardMarkup(keyboard_layout)
+        
+                            await bot.send_message(
+                            channel_id,
+                            f"📺 New Video Alert!\n\n{cc1}\n\nClick below to watch 👇",
+                            reply_markup=reply_markup,
+                            disable_web_page_preview=False  # show thumbnail
+        )
+        
+                            count += 1
+                            await asyncio.sleep(4)
+                        except FloodWait as e:
+                            await m.reply_text(str(e))
+                            time.sleep(e.x)
+                            continue
+                elif "https://apps-s3-prod.utkarshapp.com/admin_v1/file_manager/pdf" in url:
+                        try:
+                            print(f"⚠️ Utkarsh PDF - sending link only (no download)")
+                            keyboard_layout = [
+                                [InlineKeyboardButton("📖 View PDF ", url=url)]
+                            ]
+                            reply_markup = InlineKeyboardMarkup(keyboard_layout)
+                            await bot.send_message(channel_id, cc1, reply_markup=reply_markup, disable_web_page_preview=True)
+                            count += 1
+                            await asyncio.sleep(4)
+                        except FloodWait as e:
+                            await m.reply_text(str(e))
+                            time.sleep(e.x)
+                            continue
+                
                 elif ".pdf" in url:
                     final_url = url
                     need_referer = False
