@@ -838,12 +838,14 @@ async def txt_handler(bot: Client, m: Message):
 
                 if final_url:
                     print(f"✅ Final 360p URL selected: {final_url}")
-                    return final_url
+                    url = final_url
+                   
                 else:
                     print("⚠️ 360p format not found, falling back to first available format")
                     if formats:
                          return formats[0].get("url")
-                    return None
+                    else:
+                        url = None
 
 
 
