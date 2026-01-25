@@ -697,28 +697,46 @@ import subprocess
 import asyncio
 import os
 
-def fetch_player_url(youtube_url):
+import yt_dlp
+import logging
+
+def fetch_player_url(youtube_url: str) -> str:
     """
     Extract direct player URL (video+audio) from YouTube link.
     """
+
+    # Normalize embed or short links
+    if "youtube.com/embed/" in youtube_url:
+        video_id = youtube_url.split("embed/")[-1].split("?")[0]
+        youtube_url = f"https://www.youtube.com/watch?v={video_id}"
+    elif "youtu.be/" in youtube_url:
+        video_id = youtube_url.split("/")[-1].split("?")[0]
+        youtube_url = f"https://www.youtube.com/watch?v={video_id}"
+
     ydl_opts = {
         "format": "bestvideo+bestaudio/best",
         "quiet": True,
         "noplaylist": True,
     }
+
     try:
-        print(f"🎯 Extracting player URL from: {youtube_url}")
+        print("Extracting player URL from:", youtube_url)
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(youtube_url, download=False)
             player_url = info.get("url")
-            print(f"✅ Player URL extracted: {player_url}")
-            return player_url
+            print("Extracted Player URL:", player_url)
+            if player_url:
+                return download_from_player(player_url, name)
+            else:
+                logging.error("No player URL found")
+
+                return None
     except Exception as e:
         logging.error(f"Error extracting player URL: {e}")
         return None
 
 
-def download_from_player(player_url, name):
+def download_from_player(player_url: str, name: str) -> str | None:
     """
     Download video+audio from resolved player URL.
     """
@@ -732,16 +750,16 @@ def download_from_player(player_url, name):
     }
 
     try:
-        print(f"⬇️ Downloading from player URL: {player_url}")
+        print("⬇️ Downloading from player URL:", player_url)
         response = requests.get(player_url, headers=headers, stream=True, allow_redirects=True)
-        print(f"➡️ Final resolved URL: {response.url}")
+        print("➡️ Final resolved URL:", response.url)
 
         if response.status_code == 200:
             with open(name, "wb") as f:
                 for chunk in response.iter_content(chunk_size=1024*1024):
                     if chunk:
                         f.write(chunk)
-            print(f"✅ Saved as {name}")
+            print("✅ Saved as", name)
             return name
         else:
             logging.error(f"Download error {response.status_code} for {response.url}")
@@ -749,6 +767,7 @@ def download_from_player(player_url, name):
     except Exception as e:
         logging.error(f"Download exception: {e}")
         return None
+
 
 
 async def download_video(url, cmd, name):
