@@ -823,33 +823,8 @@ async def txt_handler(bot: Client, m: Message):
                 bcov = f'bcov_auth={cwtoken}'
                 url = url.split("bcov_auth")[0]+bcov
             elif "embed" in url or "youtube.com" in url or "youtu.be" in url:
-                api_url = f"https://ytdl.socialplug.io/api/video-info?url={url}"
-                print(f"Fetching video info from: {api_url}")
-                resp = requests.get(api_url)
-                data = resp.json()
-
-        # Extract 360p URL
-                formats = data.get("format_options", {}).get("video", {}).get("mp4", [])
-                final_url = None
-                for fmt in formats:
-                    if fmt.get("quality") == "360p":
-                        final_url = fmt.get("url")
-                        break
-
-                if final_url:
-                    # Force replace redirector domain
-                    
-                    print(f"✅ Final 360p URL selected: {final_url}")
-                    url = final_url
-                   
-                else:
-                    print("⚠️ 360p format not found, falling back to first available format")
-                    if formats:
-                         url = formats[0].get("url")
-
-                    else:
-                        url = None
-
+                video_id = url.split("/")[-1].split("?")[0]
+                url = f"https://www.youtube.com/watch?v={video_id}"
 
 
             elif "dragoapi.vercel.app" in url and "*" in url :
