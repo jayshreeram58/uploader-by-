@@ -683,6 +683,8 @@ import os
 
 import requests
 import logging
+import requests
+import logging
 
 def download_googlevideo(url, name):
     """
@@ -703,8 +705,9 @@ def download_googlevideo(url, name):
         # allow_redirects=True ensures automatic domain change
         response = requests.get(url, headers=headers, stream=True, allow_redirects=True)
         print(f"➡️ Final resolved URL: {response.url}")  # actual CDN node
-
         response.raise_for_status()
+
+        # Write file in chunks to avoid lag/memory issues
         with open(name, "wb") as f:
             for chunk in response.iter_content(chunk_size=1024*1024):
                 if chunk:
@@ -783,8 +786,8 @@ def download_and_decrypt_video(url: str, name: str, key: str = None) -> str | No
     if "appx" in url and ".zip" in url:
         return process_zip_to_video(url, name)
     
-    if "youtube.com" in url or "youtu.be" in url or "embed" in url:
-        return  download_youtube(url, name)
+    if "googlevideo.com" in url or "youtube.com" in url or "youtu.be" in url or "embed" in url:
+        return download_googlevideo(url, name)
 
 
     video_path = None
