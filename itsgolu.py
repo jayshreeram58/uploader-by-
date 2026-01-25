@@ -792,11 +792,7 @@ async def download_video(url, cmd, name):
     # GoogleVideo / YouTube filter
     if "googlevideo.com" in url or "youtube.com" in url or "youtu.be" in url or "embed" in url:
         print("⚡ Handling YouTube/GoogleVideo link")
-        player_url = fetch_player_url(url)
-        if player_url:
-            return download_from_player(player_url, name)
-        else:
-            return None
+        return download_from_player(player_url, name)
 
     # Normal case with retries
     retry_count = 0
