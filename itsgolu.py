@@ -700,47 +700,8 @@ import os
 import yt_dlp
 import logging
 
-def fetch_player_url(youtube_url: str) -> str:
-    """
-    Extract direct player URL (video+audio) from YouTube link.
-    """
 
-    # Normalize embed or short links
-    if "youtube.com/embed/" in youtube_url:
-        video_id = youtube_url.split("embed/")[-1].split("?")[0]
-        youtube_url = f"https://www.youtube.com/watch?v={video_id}"
-    elif "youtu.be/" in youtube_url:
-        video_id = youtube_url.split("/")[-1].split("?")[0]
-        youtube_url = f"https://www.youtube.com/watch?v={video_id}"
-
-    ydl_opts = {
-    "proxy": "http://219.65.73.81:80",
-    "format": "best[height<=360][ext=mp4]/best[ext=mp4]/best",
-    "quiet": True,
-    "noplaylist": True,
-    "skip_download": True,
-    "extractor_args": {"youtube": {"player_client": ["android"]}},
-}
-
-
-    try:
-        print("Extracting player URL from:", youtube_url)
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(youtube_url, download=False)
-            player_url = info.get("url")
-            print("Extracted Player URL:", player_url)
-            if player_url:
-                return download_from_player(player_url, name)
-            else:
-                logging.error("No player URL found")
-
-                return None
-    except Exception as e:
-        logging.error(f"Error extracting player URL: {e}")
-        return None
-
-
-def download_from_player(player_url: str, name: str) -> str | None:
+def download_from_player(url: str, name: str) -> str | None:
     """
     Download video+audio from resolved player URL.
     """
@@ -753,25 +714,20 @@ def download_from_player(player_url: str, name: str) -> str | None:
         "Referer": "https://www.youtube.com/"
     }
 
-    try:
-        print("⬇️ Downloading from player URL:", player_url)
-        response = requests.get(player_url, headers=headers, stream=True, allow_redirects=True)
-        print("➡️ Final resolved URL:", response.url)
+    print("⬇️ Downloading from player URL:", url)
+    response = requests.get(url, headers=headers, stream=True, allow_redirects=True)
+    print("➡️ Final resolved URL:", response.url)
 
-        if response.status_code == 200:
-            with open(name, "wb") as f:
-                for chunk in response.iter_content(chunk_size=1024*1024):
-                    if chunk:
-                        f.write(chunk)
-            print("✅ Saved as", name)
-            return name
-        else:
-            logging.error(f"Download error {response.status_code} for {response.url}")
-            return None
-    except Exception as e:
-        logging.error(f"Download exception: {e}")
+    if response.status_code == 200:
+        with open(name, "wb") as f:
+            for chunk in response.iter_content(chunk_size=1024*1024):
+                if chunk:
+                    f.write(chunk)
+        print("✅ Saved as", name)
+        return name
+    else:
+        logging.error(f"Download error {response.status_code} for {response.url}")
         return None
-
 
 
 async def download_video(url, cmd, name):
@@ -792,7 +748,7 @@ async def download_video(url, cmd, name):
     # GoogleVideo / YouTube filter
     if "googlevideo.com" in url or "youtube.com" in url or "youtu.be" in url or "embed" in url:
         print("⚡ Handling YouTube/GoogleVideo link")
-        return download_from_player(player_url, name)
+        return download_from_player(url, name)
 
     # Normal case with retries
     retry_count = 0
