@@ -820,8 +820,7 @@ async def txt_handler(bot: Client, m: Message):
                 url = f"https://anonymouspwplayer-0e5a3f512dec.herokuapp.com/pw?url={url}&token={raw_text4}"
 
             if "edge.api.brightcove.com" in url:
-                bcov = f'bcov_auth={cwtoken}'
-                url = url.split("bcov_auth")[0]+bcov
+                pass
             elif "embed" in url or "youtube.com" in url or "youtu.be" in url:
                 youtube_url = url
                 api_url = (
