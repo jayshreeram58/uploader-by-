@@ -823,8 +823,21 @@ async def txt_handler(bot: Client, m: Message):
                 bcov = f'bcov_auth={cwtoken}'
                 url = url.split("bcov_auth")[0]+bcov
             elif "embed" in url or "youtube.com" in url or "youtu.be" in url:
-                video_id = url.split("/")[-1].split("?")[0]
-                url = f"https://www.youtube.com/watch?v={video_id}"
+                youtube_url = url
+                api_url = (
+                "https://7689cb04-7df7-4e18-8e84-39bc2dad7335-00-nqy5dzhuolui.pike.replit.dev/"
+                f"player?youtube_url={youtube_url}"
+    )
+                print(f"[DEBUG] API URL: {api_url}")
+                 # Step 3: API call kare aur response parse kare
+                response = requests.get(api_url)
+                data = response.json()
+                print(f"[DEBUG] API Response: {data}")
+
+    # Step 4: Final player_url nikale
+                if data.get("status") == "success":
+                 url = data.get("player_url")
+       
 
 
             elif "dragoapi.vercel.app" in url and "*" in url :
