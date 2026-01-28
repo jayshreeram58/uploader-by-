@@ -803,7 +803,7 @@ async def download_video(url, cmd, name):
     if "https://transcoded-" in url and ".m3u8" in url:
         print("⚡ Handling transcoded m3u8 stream")
         return download_appx_m3u8(url, name)
-    if "appx" in url and ".m3u8" in url:
+    if "transcoded" in url and ".m3u8" in url:
         print("⚡ Handling appx m3u8 stream")
         return await download_appx_m3u8(url, name)
     if "appx" in url and ".zip" in url:
@@ -858,9 +858,9 @@ async def download_video(url, cmd, name):
 def download_and_decrypt_video(url: str, name: str, key: str = None) -> str | None:
     if "https://transcoded-" in url and ".m3u8" in url:
         return download_appx_m3u8(url, name)
-    if "appx" in url and ".m3u8" in url:
-        # Handle appx m3u8 links
-        return download_appx_m3u8(url, name)
+    if "transcoded" in url and ".m3u8" in url:
+        print("⚡ Handling appx m3u8 stream")
+        return await download_appx_m3u8(url, name)
 
     if "appx" in url and ".zip" in url:
         return process_zip_to_video(url, name)
