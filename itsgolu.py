@@ -53,7 +53,7 @@ import os
 import asyncio
 import subprocess
 
-async def download_appx_m3u8(url: str, name: str) -> str | None:
+def download_appx_m3u8(url: str, name: str) -> str | None:
     """
     Download appx m3u8 video and return output file path only
     """
