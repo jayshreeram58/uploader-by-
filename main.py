@@ -991,7 +991,7 @@ async def txt_handler(bot: Client, m: Message):
                url = url[:-4] + ".mkv"
 
     # URL = * se pehle wala
-               url = before.strip()
+               
 
     # APPX KEY = * ke baad wala decoded (final digit)
                appxkey = base64.b64decode(after.strip()).decode().strip()
