@@ -1008,7 +1008,7 @@ async def txt_handler(bot: Client, m: Message):
                before, after = enc_url.split("*", 1)
                url = before.strip()
                # sirf ? se pehle wale part me change
-               path, sep, query = raw_url.partition("?")
+               path, sep, query = url.partition("?")
                if path.endswith(".mp4"):
                  path = path[:-4] + ".mkv"
                  url = path + sep + query
